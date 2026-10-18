@@ -78,8 +78,8 @@
   <text x="812" y="212" class="t mono">similar_incidents</text><text x="960" y="212" class="s muted">episodic</text>
   <text x="812" y="236" class="t mono">runbooks_for</text><text x="925" y="236" class="s muted">procedural</text>
   <text x="812" y="260" class="t mono">decisions_and_docs · facts</text><text x="1030" y="260" class="s muted">semantic</text>
-  <text x="812" y="284" class="t mono">who_knows</text><text x="900" y="284" class="s muted">company brain</text>
-  <text x="812" y="306" class="s muted">precedents, runbooks, ADRs, experts</text>
+  <text x="812" y="284" class="t mono">trace_change · who_knows</text><text x="1010" y="284" class="s muted">company brain</text>
+  <text x="812" y="306" class="s muted">precedents, runbooks, ADRs, why a change shipped</text>
 
   <!-- agents -> graph (concurrent writes) -->
   <path d="M245,322 C245,350 380,345 410,378" class="flow" stroke="#4fa3ff" marker-end="url(#ah-b)"/>
@@ -141,11 +141,11 @@
   <text x="612" y="558" class="s mono muted">read_investigation</text>
 
   <!-- COMMANDER -->
-  <rect x="420" y="574" width="360" height="72" rx="14" fill="#ff8a3d" opacity=".18" filter="url(#soft)" class="glow" style="animation-delay:.8s"/>
-  <rect x="420" y="574" width="360" height="72" rx="14" fill="#1d150d" stroke="#ff8a3d" stroke-width="1.5"/>
+  <rect x="405" y="574" width="390" height="72" rx="14" fill="#ff8a3d" opacity=".18" filter="url(#soft)" class="glow" style="animation-delay:.8s"/>
+  <rect x="405" y="574" width="390" height="72" rx="14" fill="#1d150d" stroke="#ff8a3d" stroke-width="1.5"/>
   <text x="442" y="604" class="h" style="fill:#ff8a3d">COMMANDER</text>
   <text x="600" y="604" class="s muted">decides and pages</text>
-  <text x="442" y="630" class="t mono">who_to_page → record_decision</text>
+  <text x="442" y="630" class="t mono">containment · who_to_page → record_decision</text>
 
   <!-- commander -> decision -->
   <path d="M600,646 L600,676" class="flow" stroke="#ffc24b" marker-end="url(#ah-o)"/>
@@ -156,14 +156,23 @@
   <text x="366" y="711" class="s" text-anchor="middle" font-weight="700" style="fill:#fff">SEV1</text>
   <text x="398" y="711" class="t" font-weight="600">Decision</text>
   <text x="466" y="711" class="s mono muted">-[:BASED_ON]→ Findings · ROOT_CAUSE · SUSPECTS · PAGES</text>
-  <text x="344" y="733" class="s muted">click “Why?” to walk Decision → Findings → evidence nodes and the Cypher behind them</text>
+  <text x="344" y="733" class="s muted">proof gate: algo.SPpaths + algo.maxFlow · click “Why?” for the evidence trail</text>
+
+
+  <!-- ACTIONS (human-approved) -->
+  <path d="M328,712 L300,712" class="flow" stroke="#3ddc97" marker-end="url(#ah-g)"/>
+  <rect x="40" y="664" width="258" height="96" rx="12" fill="#0f1d18" stroke="#3ddc97"/>
+  <text x="56" y="690" class="t" font-weight="700" style="fill:#3ddc97">⚡ Actions, after Approve</text>
+  <text x="56" y="712" class="s mono">→ page on Discord / Slack</text>
+  <text x="56" y="730" class="s mono">→ GitHub incident issue</text>
+  <text x="56" y="748" class="s muted">(:User)-[:APPROVED]->(:Action)</text>
 
   <!-- MEMORY LOOP -->
   <path d="M872,712 C1100,712 1170,640 1170,470 C1170,300 1160,236 1124,236" class="flow slow" stroke="#3ddc97" marker-end="url(#ah-g)"/>
   <circle r="5" fill="#3ddc97"><animateMotion dur="3.6s" repeatCount="indefinite"><mpath href="#p-loop"/></animateMotion></circle>
   <circle r="5" fill="#3ddc97" opacity=".6"><animateMotion dur="3.6s" begin="1.8s" repeatCount="indefinite"><mpath href="#p-loop"/></animateMotion></circle>
   <rect x="935" y="560" width="210" height="92" rx="12" fill="#0f1d18" stroke="#3ddc97"/>
-  <text x="952" y="586" class="t" font-weight="700" style="fill:#3ddc97">Mark resolved &amp; remember</text>
+  <text x="952" y="586" class="t" font-weight="700" style="fill:#3ddc97">Fix worked: remember</text>
   <text x="952" y="608" class="s mono">→ (:Incident) memory</text>
   <text x="952" y="626" class="s mono">→ runbook.success_count++</text>
   <text x="952" y="644" class="s muted">recalled in the next session</text>

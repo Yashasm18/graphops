@@ -133,5 +133,6 @@ npm test              # 14 integration tests against FalkorDB
 npm run eval -- 50    # quick benchmark run
 npm run eval:otel     # the real OpenTelemetry Demo faults
 ```
-Then in the UI: click **Investigate**, open a tool card and read its Cypher, open the **Cypher log**, click **Why?**,
-try **What-if → Containment plan** on `kafka-events`, and switch the tenant to **Astronomy Shop**.
+Then in the UI: click **Investigate** and read the brief at the top (decision, proof gate, actions). Expand an agent's section
+and a tool row to read its Cypher, open the **Cypher log**, click **Why?**, try **What-if → Containment plan** on `kafka-events`,
+and switch the tenant to **Astronomy Shop** (the real OpenTelemetry Demo topology).

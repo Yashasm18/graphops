@@ -7,13 +7,15 @@
 > "Checkout is throwing 500s and customers can't pay." In seconds GraphOps says it's **payments-db**
 > connection exhaustion triggered by **DEP-981** (a retry change shipped 23 minutes ago). This is the same failure as **INC-2041**,
 > so it recommends rolling back and following **RB-PAY-01**, and it pages **Diego** (on call), **Nina** (who fixed it last time) and
-> **Aisha** (who wrote the deploy). Every claim links back to the graph nodes and Cypher queries behind it.
+> **Aisha** (who wrote the deploy). It also finds that Diego had warned against that change in `#payments-eng`. Every claim is
+> checked against the graph before it is stored, and links back to the nodes and Cypher queries behind it.
 
 Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It targets all three tracks.
 
-![GraphOps: agents, live graph and the Why? trace](docs/screenshot.png)
+![GraphOps: decision brief, live graph and the Why? trace](docs/screenshot.png)
 
-*Left: agent timeline and the Commander's decision. Center: the FalkorDB graph, with the decision's evidence subgraph highlighted. Right: the Why? trace from Decision to Findings to evidence nodes.*
+*A real Gemini run. Left: the brief (decision, proof gate VERIFIED, actions waiting for approval), then one collapsible section per
+agent. Center: the FalkorDB graph, with the evidence nodes marked. Right: the Why? trace, from the Decision to its Findings to the evidence nodes.*
 
 ## Submission at a glance
 
@@ -61,7 +63,9 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
                                   ▼
    (:Decision)-[:BASED_ON]->(:Finding)  -[:ROOT_CAUSE]->(:Service)  -[:SUSPECTS]->(:Deploy)
               -[:USES]->(:Runbook)       -[:PAGES]->(:Person)
-                                  │  "Mark resolved & remember"
+            proof gate (SPpaths + maxFlow) │ VERIFIED / WEAK / REJECTED
+                                  ├──▶ (:Action) page + GitHub issue, sent only after a human approves
+                                  │  "Fix worked: remember"
                                   ▼
    (:Incident {source:'graphops'})  ← episodic memory the Historian finds next session
    Runbook.success_count += 1       ← procedural memory gets stronger
@@ -69,18 +73,21 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
 
 </details>
 
-* **Triage** (Track 1) calls `probable_root_cause`. It walks `DEPENDS_ON*0..5` from every alerting service and scores the
-  nodes that explain the most alerts, boosting the deepest alerting node and nodes next to a recent deploy. It then calls
+* **Triage** (Track 1) calls `probable_root_cause`. It walks `DEPENDS_ON*0..5` from every alerting service and ranks the
+  nodes that explain the most alerts first (parsimony), then breaks ties by own alerts, the share of failing direct callers,
+  being the deepest failing node, and a recent deploy on it or next to it. It then calls
   `recent_changes`, `blast_radius` (upstream services, business capabilities and **revenue at risk per minute**) and
   `dependency_path` (`shortestPath`) to show how the failure propagates. `critical_nodes` runs **PageRank** and
   **betweenness centrality**, and `service_clusters` runs **label propagation**.
 * **Historian** (Track 2) runs *at the same time* as Triage and writes to the same investigation. It recalls
   **episodic** memory (`similar_incidents`, including incidents GraphOps itself learned), **procedural** memory (`runbooks_for`,
-  ranked by graph distance and how often each runbook worked) and **semantic** memory (`decisions_and_docs`, which covers ADRs,
-  documents and `Fact` nodes taught by users).
+  ranked by graph distance and how often each runbook worked or failed) and **semantic** memory (`decisions_and_docs`, which covers ADRs,
+  documents and `Fact` nodes taught by users, plus full-text `search_knowledge`). For the company brain it calls `trace_change`
+  on the suspect deploy (deploy → ticket → project → chat, including warnings that were ignored) and `project_context`.
 * **Commander** (Track 3) never receives the other agents' output directly. It **reads the shared investigation subgraph**,
-  ranks who to page (on-call + past resolvers + deploy authors + people who worked on the system, each with reasons)
-  and records a `Decision` linked to every finding, which in turn links to its evidence nodes.
+  runs `containment_plan`, ranks who to page (on-call + past resolvers + deploy authors + people who worked on the system,
+  each with reasons) and calls `record_decision`. That runs the proof gate, links the `Decision` to every finding, and
+  proposes the real-world actions.
 * **Chat** answers follow-ups with every tool plus guarded read-only text-to-Cypher. It loads the conversation
   history *from the graph* (`(:Investigation)-[:HAS_TURN]->(:Turn)-[:NEXT]->(:Turn)`), and `remember_fact` lets it learn from users.
 
@@ -148,15 +155,16 @@ broke" look the same in the graph. GraphOps keeps the true cause in its top 3 (7
 | Track | What GraphOps does |
 | --- | --- |
 | **1 · Act on connected data** | Multi-hop root-cause scoring (tested on the **real OpenTelemetry Demo topology and fault flags**), blast radius with revenue impact, **human-approved real actions** (Discord/Slack page, GitHub incident issue), shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **causal-path proof gate** (`algo.SPpaths` + `algo.maxFlow`), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
-| **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (Runbook success counts) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, and **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`) |
+| **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (runbook success/failure counts and `SUPERSEDES` versions) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`, `graphops_otel`) and, live, **one `GRAPH.COPY` sandbox per visitor**. Recall of a repeated fault: **16/16** on the OpenTelemetry Demo |
 | **3 · Company brain** | People, teams, **projects, tickets, Slack messages**, services, capabilities, deploys, docs, ADRs and incidents in one graph. `trace_change` follows a deploy to its ticket, project and chat thread and surfaces **warnings that were raised and ignored**. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
 
 ### Explainability you can click
 
-* Each agent step in the timeline shows the tool, its arguments, its result and the **exact Cypher with parameters**.
-* The **Why? trace** tab renders `Decision → BASED_ON → Finding → EVIDENCE → node` and highlights that subgraph on the canvas.
-* The **Cypher log** tab lists every query the agents ran, with row counts and timings.
-* The live graph pulses each node in the acting agent's colour as tools touch it.
+* **The brief** at the top shows the decision, the proof-gate verdict with its causal paths, and the proposed actions with their exact payloads.
+* **One section per agent** lists its findings and every tool call. Expand a call to see the **exact Cypher** and its result.
+* The **Why? trace** tab renders `Decision → BASED_ON → Finding → EVIDENCE → node` and marks those nodes on the graph.
+* The **Cypher log** tab lists every query the agents ran, with row counts and timings. **What-if** runs simulations on a `GRAPH.COPY`.
+* The graph lights up each node in the acting agent's colour as tools touch it. The **Layers** menu switches node types on and off.
 
 ## Run it
 
@@ -173,7 +181,7 @@ GEMINI_API_KEY=your-key docker compose up --build
 cd graphops
 npm install
 cp .env.example .env      # add GEMINI_API_KEY and FalkorDB connection
-npm run seed              # seeds tenants acme + globex
+npm run seed              # seeds tenants acme, globex and otel (from data/otel-demo.json)
 npm start                 # http://localhost:3000
 ```
 
@@ -183,7 +191,9 @@ FalkorDB options:
 
 **No LLM key or rate-limited?** Set `GRAPHOPS_SCRIPTED=true`, or let it fall back by itself. Each agent then runs a deterministic
 playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
-the agents choose their own tools. On a 429 they back off and step down from `gemini-3.8-flash` to `gemini-3.5-flash-lite`.
+the agents choose their own tools. Each Gemini model has its own free-tier quota, so on a 429 the model is put on cooldown and the
+call moves to the next one in `GEMINI_MODELS` (default `gemini-3.8-flash`, then `gemini-3.5-flash-lite`, `gemini-3.7-flash`…). If an
+agent finishes without recording findings, its playbook records grounded ones, so the shared state is never empty.
 
 ### Deploy it (Render, free)
 
@@ -198,7 +208,7 @@ npm test          # 14 integration tests against FalkorDB (uses its own graph, g
 npm run eval      # keyless fault-injection benchmark, writes docs/EVAL.md
 npm run import:otel && npm run eval:otel   # real OpenTelemetry Demo topology + its fault flags
 ```
-Both run in GitHub Actions against a `falkordb/falkordb` service container on every push.
+`npm test` and `npm run eval` run in GitHub Actions against a `falkordb/falkordb` service container on every push.
 
 ### Use the graph tools from Claude, Cursor or any MCP client
 
@@ -224,7 +234,7 @@ Both run in GitHub Actions against a `falkordb/falkordb` service container on ev
 (:Deploy)-[:CHANGED]->(:Service), (:Deploy)-[:AUTHORED_BY]->(:Person)
 (:Alert)-[:FIRED_ON]->(:Service)
 (:Incident)-[:ROOT_CAUSE|AFFECTED]->(:Service), -[:RESOLVED_BY]->(:Person), -[:MITIGATED_WITH]->(:Runbook), -[:TRIGGERED_BY]->(:Deploy)
-(:Runbook {success_count})-[:FOR]->(:Service)
+(:Runbook {success_count, failure_count, version})-[:FOR]->(:Service), (:Runbook)-[:SUPERSEDES]->(:Runbook)
 (:Decision)-[:ABOUT]->(:Service), -[:MADE_BY]->(:Person), -[:MOTIVATED_BY]->(:Incident)
 (:Document)-[:DOCUMENTS]->(:Service), (:Fact)-[:ABOUT]->(:Service), (:Person)-[:WORKED_ON]->(:Service)
 (:Project)-[:OWNED_BY]->(:Team), (:Project)-[:TOUCHES]->(:Service), (:Person)-[:WORKS_ON]->(:Project)
@@ -235,13 +245,15 @@ Both run in GitHub Actions against a `falkordb/falkordb` service container on ev
 (:Investigation)-[:CONCLUDED]->(:Decision {source:'agent'})-[:BASED_ON]->(:Finding)
 (:Investigation)-[:HAS_TURN]->(:Turn)-[:NEXT]->(:Turn)
 (:Incident {source:'graphops'})-[:FROM_INVESTIGATION]->(:Investigation)
+(:Decision {verdict, coverage})-[:ROOT_CAUSE|SUSPECTS|USES|PAGES|ABOUT]->(…)
+(:Action {kind, status, payload})-[:FOR_DECISION]->(:Decision), (:User)-[:APPROVED]->(:Action), (:Action)-[:NOTIFIES]->(:Person)
 ```
 
 ## Cypher queries and algorithms the product depends on
 
 All of these live in [`src/tools.js`](src/tools.js). Each agent tool is one of them.
 
-**1. Root-cause ranking** (`probable_root_cause`). Multi-hop from every alerting service. The candidate that explains the most alerts, alerts itself, sits deepest and is next to a recent deploy wins.
+**1. Root-cause ranking** (`probable_root_cause`). Multi-hop from every alerting service. Explaining the most alerts counts most; own alerts, failing direct callers, depth and a nearby recent deploy break ties. Excerpt:
 ```cypher
 MATCH (al:Alert {status: 'firing'})-[:FIRED_ON]->(a:Service)
 WITH collect(DISTINCT a) AS alerting
@@ -297,11 +309,13 @@ RETURN i.id, i.title, root.name, overlap, p.name AS resolved_by, rb.id AS runboo
 ORDER BY similarity DESC
 ```
 
-**6. Procedural memory** (`runbooks_for`). Runbooks ranked by graph distance, then by how often they worked.
+**6. Procedural memory** (`runbooks_for`). Current runbook versions, ranked by graph distance, then by times worked minus times failed.
 ```cypher
 MATCH p = (s:Service {name: $service})-[:DEPENDS_ON*0..2]-(x:Service)<-[:FOR]-(rb:Runbook)
+WHERE NOT ()-[:SUPERSEDES]->(rb)          // only the current version of each runbook
 WITH rb, x, min(length(p)) AS distance
-RETURN rb.id, rb.title, x.name, distance, rb.success_count ORDER BY distance, rb.success_count DESC
+RETURN rb.id, rb.title, x.name, distance, rb.success_count, coalesce(rb.failure_count, 0) AS failed
+ORDER BY distance, rb.success_count - failed DESC
 ```
 
 **7. Who to page** (`who_to_page`). Combines four relationship types into a ranked list with reasons. See `src/tools.js`.
@@ -379,11 +393,11 @@ OPTIONAL MATCH (tk)-[:FOLLOWS_UP]->(dec:Decision) RETURN tk.id, tk.title, dec.id
 | `test/` | Integration tests against a real FalkorDB (`npm test`), run in GitHub Actions |
 | `src/agents.js` | Gemini function-calling loop, triage/historian/commander/chat agents, parallel orchestration, scripted fallback |
 | `src/memory.js` | Investigations, turns, per-user history, decision trace, and resolve → episodic memory |
-| `src/seed.js` | Multi-tenant seed data (Acme e-commerce, Globex streaming) |
+| `src/seed.js` | Multi-tenant seed data (Acme e-commerce, Globex streaming, and the OpenTelemetry Demo topology) |
 | `src/db.js` | FalkorDB connection, per-tenant graphs, Cypher tracing via AsyncLocalStorage |
-| `src/server.js` | Express API and NDJSON event streaming |
+| `src/server.js` | Express API, NDJSON event streaming, public mode (per-visitor sandboxes, AI quota) |
 | `src/mcp.js` | MCP stdio server |
-| `public/` | Ops console UI (vis-network). `?tenant=acme&inv=INV-…` deep-links to an investigation from memory |
+| `public/` | Ops console UI (vis-network). `?tenant=acme&inv=INV-…` deep-links to an investigation from memory (`&v=<id>` picks a sandbox) |
 | `Dockerfile`, `docker-compose.yml` | One-command FalkorDB + GraphOps |
 
 ## AI assistance disclosure

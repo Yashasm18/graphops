@@ -27,6 +27,9 @@ const state = {
 // A random per-browser id. In public mode the server gives each visitor a
 // private GRAPH.COPY sandbox keyed by it.
 const VISITOR = (() => {
+  // ?v=<id> opens a specific sandbox (used for shareable links and screenshots).
+  const fromUrl = new URLSearchParams(location.search).get('v');
+  if (fromUrl) return fromUrl.replace(/[^a-z0-9]/gi, '').slice(0, 16);
   try {
     let v = localStorage.getItem('graphops-visitor');
     if (!v) { v = Math.random().toString(36).slice(2, 12); localStorage.setItem('graphops-visitor', v); }
