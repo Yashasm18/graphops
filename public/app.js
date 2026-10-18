@@ -344,6 +344,9 @@ function onEvent(e) {
     case 'actions':
       renderActions(e.actions);
       break;
+    case 'info':
+      add(`ℹ ${esc(e.text)}`, 'info', e.agent && state.sections?.[e.agent] ? state.sections[e.agent].body : null);
+      break;
     case 'notice':
       add(`⚠ ${esc(e.text)}`, 'notice', e.agent && state.sections?.[e.agent] ? state.sections[e.agent].body : null);
       break;
@@ -353,6 +356,7 @@ function onEvent(e) {
       s.sec.classList.add('done');
       if (e.text) s.sec.querySelector('.sec-text').insertAdjacentHTML('afterbegin', `<div class="say">${md(e.text)}</div>`);
       if (e.agent === 'commander' || e.agent === 'chat') s.sec.classList.add('collapsed');
+      if (e.agent === 'commander' && $('#brief-stats')) $('#brief-stats').textContent = 'preparing actions…';
       break;
     }
     case 'done':

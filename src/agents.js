@@ -93,7 +93,7 @@ async function generate(request, emit, agent) {
         const retriable = status === 429 || status === 503 || status === 500 || /RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(String(err?.message));
         if (!retriable) throw err;
         cooldownUntil.set(model, Date.now() + retryDelayMs(err));
-        emit({ type: 'notice', agent, text: `${model} is rate-limited, switching model` });
+        emit({ type: 'info', agent, text: `${model} is at its free-tier limit, so this step uses the next model in the pool` });
       }
     }
   }
