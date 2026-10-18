@@ -257,7 +257,11 @@ export async function investigate({ tenant, user, question, emit }) {
       { services: alerting }),
   ]);
   emit({ type: 'handoff', from: ['triage', 'historian'], to: 'commander', note: 'findings shared via graph' });
-  const brief = await runAgent({ ...base, agent: 'commander' }, `Incident report: "${question}". Read the investigation, decide, and brief the humans.`);
+  // Ground the commander in the graph's own ranking so a weaker fallback model
+  // cannot confuse the failing component with the service whose deploy triggered it.
+  const [ranked] = await runTool(tenant, 'probable_root_cause', {}, {});
+  const anchor = ranked ? ` The graph ranks ${ranked.candidate} as the most likely failing component (score ${ranked.score}). Use it as root_cause unless the findings clearly contradict it.` : '';
+  const brief = await runAgent({ ...base, agent: 'commander' }, `Incident report: "${question}".${anchor} Read the investigation, decide, and brief the humans.`);
 
   stats.ms = Date.now() - stats.started;
   emit({ type: 'done', id: investigationId, brief, stats });

@@ -331,7 +331,7 @@ export const TOOLS = {
         action: { type: 'string', description: 'Concrete mitigation steps.' },
         rationale: str,
         runbook: { type: 'string', description: 'Runbook id, or empty.' },
-        page: { type: 'array', items: str, description: 'Names of the people to page.' },
+        page: { type: 'array', items: str, description: 'Full names of the people to page, as returned by who_to_page (for example "Diego Alvarez").' },
         affected: { type: 'array', items: str, description: 'Affected service names.' },
         severity: { type: 'string', enum: ['SEV1', 'SEV2', 'SEV3'] },
       },
@@ -353,7 +353,7 @@ export const TOOLS = {
         WITH DISTINCT d
         OPTIONAL MATCH (rb:Runbook {id: $runbook}) FOREACH (_ IN CASE WHEN rb IS NULL THEN [] ELSE [1] END | CREATE (d)-[:USES]->(rb))
         WITH DISTINCT d
-        OPTIONAL MATCH (p:Person) WHERE p.name IN $page FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END | CREATE (d)-[:PAGES]->(p))
+        OPTIONAL MATCH (p:Person) WHERE p.name IN $page OR p.handle IN $page OR ('@' + p.handle) IN $page FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END | CREATE (d)-[:PAGES]->(p))
         WITH DISTINCT d
         OPTIONAL MATCH (s:Service) WHERE s.name IN $affected FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END | CREATE (d)-[:ABOUT]->(s))`,
       { inv: ctx.investigationId, id, title: a.title, action: a.action, rationale: a.rationale, severity: a.severity,

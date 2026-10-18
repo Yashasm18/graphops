@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\n/g, '<br>');
+const md = (s) => esc(s).replace(/^#{1,4}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\n/g, '<br>');
 
 const COLORS = {
   Service: '#4fa3ff', Capability: '#3ddc97', Team: '#8892b0', Person: '#e6c07b', Deploy: '#ff8a3d', Alert: '#ff5c6c',
@@ -325,7 +325,10 @@ async function openInvestigation(id) {
   state.investigationId = id;
   tl().innerHTML = '';
   add(`<div class="head"><b>${esc(id)}</b><span class="ms">from memory · ${esc(inv.status)}</span></div><div>${esc(inv.question)}</div>`, 'say');
+  for (const f of inv.findings) onEvent({ type: 'finding', ...f });
   for (const t of inv.turns.slice(1)) add(`<div class="head">${chip(t.agent || t.role)}</div><div>${md(t.text)}</div>`, `${t.agent || ''} say`);
+  if (inv.decision) renderDecision({ ...inv.decision, page: inv.decision.paged });
+  if (inv.status === 'resolved') tl().querySelector('[data-resolve]:last-of-type')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
   $('#chatform').classList.remove('hidden');
   await showTrace(id); switchTab('trace');
 }
@@ -388,4 +391,12 @@ async function init(first = true) {
   await loadGraph();
   await loadMemory();
 }
-init().catch((e) => add(`✖ ${esc(e.message)}. Is FalkorDB reachable? Check .env.`, 'notice'));
+// Deep links: ?tenant=acme&inv=INV-123 reopens an investigation from memory.
+const params = new URLSearchParams(location.search);
+if (params.get('tenant')) state.tenant = params.get('tenant');
+init()
+  .then(async () => {
+    $('#tenant').value = state.tenant;
+    if (params.get('inv')) await openInvestigation(params.get('inv'));
+  })
+  .catch((e) => add(`✖ ${esc(e.message)}. Is FalkorDB reachable? Check .env.`, 'notice'));

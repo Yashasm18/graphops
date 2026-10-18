@@ -7,6 +7,10 @@
 
 Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It targets all three tracks.
 
+![GraphOps: agents, live graph and the Why? trace](docs/screenshot.png)
+
+*Left: agent timeline and the Commander's decision. Center: the FalkorDB graph, with the decision's evidence subgraph highlighted. Right: the Why? trace from Decision to Findings to evidence nodes.*
+
 ## Why a graph
 
 An incident is a question about how things connect. Which upstream services alert *because of* a broken dependency?
@@ -75,6 +79,15 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
 
 ## Run it
 
+**Fastest (Docker):**
+
+```bash
+GEMINI_API_KEY=your-key docker compose up --build
+# open http://localhost:3000 (the graph seeds itself on first load)
+```
+
+**Local Node + any FalkorDB:**
+
 ```bash
 cd graphops
 npm install
@@ -84,7 +97,7 @@ npm start                 # http://localhost:3000
 ```
 
 FalkorDB options:
-* **Docker:** `docker run -p 6379:6379 -p 3001:3000 falkordb/falkordb:latest`
+* **Docker:** `docker run -p 6379:6379 -p 3001:3000 falkordb/falkordb:latest` (or use `docker compose` above)
 * **FalkorDB Cloud:** set `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD` (and `FALKORDB_TLS=true` if your instance uses TLS).
 
 **No LLM key or rate-limited?** Set `GRAPHOPS_SCRIPTED=true`, or let it fall back by itself. Each agent then runs a deterministic
@@ -148,4 +161,5 @@ the agents choose their own tools. On a 429 they back off and step down from `ge
 | `src/db.js` | FalkorDB connection, per-tenant graphs, Cypher tracing via AsyncLocalStorage |
 | `src/server.js` | Express API and NDJSON event streaming |
 | `src/mcp.js` | MCP stdio server |
-| `public/` | Ops console UI (vis-network) |
+| `public/` | Ops console UI (vis-network). `?tenant=acme&inv=INV-…` deep-links to an investigation from memory |
+| `Dockerfile`, `docker-compose.yml` | One-command FalkorDB + GraphOps |
