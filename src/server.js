@@ -38,7 +38,12 @@ async function tenantOf(req) {
   if (!ready.has(t)) {
     const graphs = await listTenants();
     if (!graphs.includes(base)) await seedTenant(base);
-    if (!graphs.includes(t)) await (await graphFor(base)).copy(tenantGraphName(t));
+    if (!graphs.includes(t)) {
+      await (await graphFor(base)).copy(tenantGraphName(t));
+      // The base graph may have been seeded hours ago: re-fire the alerts and
+      // move the scenario deploys back to "minutes ago" for this visitor.
+      await resetScenario(t, base);
+    }
     ready.add(t);
   }
   return t;

@@ -19,7 +19,7 @@ const LAYERS = {
   'Agent state': ['Investigation', 'Finding', 'Decision:agent', 'Action'],
 };
 const state = {
-  tenant: 'acme', layers: new Set(['Services', 'People', 'Changes & alerts', 'Incident memory', 'Projects & chat', 'Agent state']),
+  tenant: 'acme', layers: new Set(['Services', 'Changes & alerts', 'Agent state']),
   graph: { nodes: [], edges: [] }, byName: new Map(), network: null, nodesDS: null, edgesDS: null,
   investigationId: null, running: false, cypherCount: 0,
 };
@@ -77,7 +77,7 @@ function visNode(n) {
   const down = n.status === 'down', degraded = n.status === 'degraded';
   const color = COLORS[n.label] || '#888';
   return {
-    id: n.id, label: nodeLabel(n), group: n.label,
+    id: n.id, label: ['Service', 'Capability'].includes(n.label) || n.label === 'Decision' && n.agent ? nodeLabel(n) : undefined, group: n.label,
     title: `${n.label}: ${n.title || n.name}${n.status ? ` (${n.status})` : ''}`,
     shape: isSvc ? 'dot' : n.label === 'Person' ? 'diamond' : n.label === 'Capability' ? 'star' : 'square',
     size: isSvc ? 22 - (n.tier || 2) * 3 : n.label === 'Finding' ? 8 : 10,
@@ -117,17 +117,30 @@ function renderGraph() {
     state.nodesDS = new vis.DataSet(nodes.map(visNode));
     state.edgesDS = new vis.DataSet(edges);
     state.network = new vis.Network($('#graph'), { nodes: state.nodesDS, edges: state.edgesDS }, {
-      physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 }, stabilization: { iterations: 150 } },
-      interaction: { hover: true, tooltipDelay: 120 },
+      physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -80, springLength: 110, avoidOverlap: 0.4 }, stabilization: { iterations: 250, fit: true } },
+      interaction: { hover: true, tooltipDelay: 120, hideEdgesOnDrag: true },
+      edges: { smooth: false, selectionWidth: 0, hoverWidth: 0.5 },
     });
+    settle();
   } else {
     const keep = new Set(nodes.map((n) => n.id));
+    const before = state.nodesDS.length;
     state.nodesDS.remove(state.nodesDS.getIds().filter((id) => !keep.has(id)));
     state.nodesDS.update(nodes.map(visNode));
     state.edgesDS.clear();
     state.edgesDS.add(edges);
+    if (state.nodesDS.length !== before) settle();
   }
-  $('#stats').textContent = `${state.graph.nodes.length} nodes · ${state.graph.edges.length} edges · ${state.cypherCount} cypher queries this session`;
+  $('#stats').textContent = `${nodes.length}/${state.graph.nodes.length} nodes shown · ${state.cypherCount} Cypher queries this session`;
+}
+
+// Let the layout settle, then freeze it and fit it to the view (no jiggling).
+function settle() {
+  const net = state.network;
+  if (!net) return;
+  net.setOptions({ physics: { enabled: true } });
+  net.stabilize(200);
+  net.once('stabilizationIterationsDone', () => { net.setOptions({ physics: { enabled: false } }); net.fit({ animation: { duration: 400 } }); });
 }
 
 async function loadGraph() {
@@ -168,27 +181,65 @@ function focus(name) {
 }
 
 function renderLayers() {
-  $('#layers').innerHTML = Object.keys(LAYERS).map((l) =>
-    `<label><input type="checkbox" data-layer="${l}" ${state.layers.has(l) ? 'checked' : ''}> ${l}</label>`).join('');
-  $('#legend').innerHTML = Object.entries(COLORS).map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('');
+  const open = $('#layers details')?.open;
+  const sw = (labels) => labels.map((k) => k.split(':')[0]).filter((k, i, a) => a.indexOf(k) === i)
+    .map((k) => `<span class="sw"><i style="background:${COLORS[k] || '#888'}"></i>${k}</span>`).join('');
+  $('#layers').innerHTML = `<details ${open ? 'open' : ''}><summary>Layers · ${state.layers.size}/${Object.keys(LAYERS).length} ▾</summary>
+    <div class="menu">${Object.entries(LAYERS).map(([l, labels]) => `<label><input type="checkbox" data-layer="${l}" ${state.layers.has(l) ? 'checked' : ''}>
+      <span><b>${l}</b><span class="sws">${sw(labels)}</span></span></label>`).join('')}
+    <button class="ghost fit" data-fit>Fit graph</button></div></details>`;
 }
 $('#layers').addEventListener('change', (e) => {
   const l = e.target.dataset.layer;
   e.target.checked ? state.layers.add(l) : state.layers.delete(l);
-  renderGraph();
+  renderLayers(); renderGraph();
 });
+$('#layers').addEventListener('click', (e) => { if (e.target.matches('[data-fit]')) state.network?.fit({ animation: true }); });
 
 // ---------------- Timeline ----------------
+// Layout: a brief card pinned on top (decision, proof, actions), then one
+// collapsible section per agent with its steps and findings.
 const tl = () => $('#timeline');
-function add(html, cls = '') {
-  const el = document.createElement('div');
-  el.className = `ev ${cls}`;
-  el.innerHTML = html;
-  tl().appendChild(el);
-  tl().scrollTop = tl().scrollHeight;
-  return el;
-}
 const chip = (a) => `<span class="chip ${a}">${esc(a)}</span>`;
+function el(html, cls = '') { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; return d; }
+function add(html, cls = '', parent = null) {
+  const node = el(html, `ev ${cls}`);
+  (parent || flow()).appendChild(node);
+  return node;
+}
+function ensureLayout() { if (!$('#brief') || !$('#flow')) resetTimeline(); }
+function flow() { ensureLayout(); return $('#flow'); }
+function resetTimeline() {
+  tl().innerHTML = '';
+  const b = el('', 'brief'); b.id = 'brief'; tl().appendChild(b);
+  const f = el('', 'flow'); f.id = 'flow'; tl().appendChild(f);
+  state.sections = {};
+}
+function slot(name) {
+  ensureLayout();
+  let s = $(`#brief [data-slot="${name}"]`);
+  if (!s) {
+    const order = ['head', 'decision', 'proof', 'actions', 'note'];
+    s = el('', `slot-${name}`); s.dataset.slot = name;
+    const b = $('#brief');
+    const after = [...b.children].find((c) => order.indexOf(c.dataset.slot) > order.indexOf(name));
+    after ? b.insertBefore(s, after) : b.appendChild(s);
+  }
+  return s;
+}
+function section(agent) {
+  ensureLayout();
+  state.sections ||= {};
+  if (state.sections[agent]) return state.sections[agent];
+  const sec = el(`<div class="sec-head" data-toggle>${chip(agent)}<span class="st">working…</span><span class="cnt"></span><span class="caret">▾</span></div>
+    <div class="sec-text"></div><div class="sec-body"></div>`, `sec ${agent}`);
+  flow().appendChild(sec);
+  return (state.sections[agent] = { sec, tools: 0, queries: 0, findings: 0, body: sec.querySelector('.sec-body') });
+}
+function bump(agent, k, n = 1) {
+  const s = section(agent); s[k] += n;
+  s.sec.querySelector('.cnt').textContent = `${s.findings} findings · ${s.tools} tools · ${s.queries} queries`;
+}
 
 function logCypher(e) {
   const box = $('#tab-cypher');
@@ -200,66 +251,83 @@ function logCypher(e) {
 }
 
 const pendingTools = new Map();
+function findingHtml(e) {
+  return `<div class="head"><span class="kind">${esc(e.kind.replace('_', ' '))}</span><span class="conf-n">${Math.round((e.confidence ?? 0.7) * 100)}%</span></div>
+    <div>${md(e.summary)}</div>
+    <div class="pills">${(e.evidence || []).map((x) => `<span class="pill" data-focus="${esc(x)}">${esc(x)}</span>`).join('')}</div>`;
+}
 function onEvent(e) {
   switch (e.type) {
     case 'investigation':
       state.investigationId = e.id;
-      add(`<div class="head"><b>${esc(e.id)}</b><span class="ms">${e.mode === 'llm' ? 'Gemini agents' : 'scripted agents'}</span></div><div>${esc(e.question)}</div>`, 'say');
+      slot('head').innerHTML = `<div class="brief-head"><span><b>${esc(e.id)}</b> · ${e.mode === 'llm' ? 'Gemini agents' : 'scripted agents'}</span><span class="ms" id="brief-stats">working…</span></div>
+        <div class="q">${esc(e.question)}</div>`;
       break;
     case 'handoff':
-      add(`${[].concat(e.from).map(chip).join(' ')} → ${[].concat(e.to).map(chip).join(' ')} · ${esc(e.note)}`, 'handoff');
+      add(`${[].concat(e.from).map(chip).join(' ')} → ${[].concat(e.to).map(chip).join(' ')} <span class="ms">${esc(e.note)}</span>`, 'handoff');
+      if ([].concat(e.to).includes('commander')) for (const a of ['triage', 'historian']) state.sections?.[a]?.sec.classList.add('collapsed');
       break;
     case 'agent_start':
-      add(`<div class="head">${chip(e.agent)}<span class="ms">started</span></div>`, e.agent);
+      section(e.agent);
       break;
     case 'thought':
-      add(`<div class="head">${chip(e.agent)}</div><div>${md(e.text)}</div>`, `${e.agent} say`);
       break;
     case 'tool_call': {
-      const el = add(`<div class="head"><span class="tool">⚙ ${esc(e.tool)}(${esc(Object.values(e.args || {}).map((v) => Array.isArray(v) ? `[${v.length}]` : String(v).slice(0, 40)).join(', '))})</span><span class="ms">…</span></div>`, e.agent);
-      pendingTools.set(`${e.agent}:${e.tool}`, el);
+      if (e.tool === 'record_finding' || e.tool === 'record_decision') { pulse(namesIn(e.args), e.agent); break; }
+      const s = section(e.agent);
+      const row = add(`<details><summary><span class="tool">${esc(e.tool)}</span><span class="args">${esc(Object.values(e.args || {}).map((v) => Array.isArray(v) ? `[${v.length}]` : String(v).slice(0, 32)).join(', '))}</span><span class="ms">…</span></summary></details>`, 'trow', s.body);
+      pendingTools.set(`${e.agent}:${e.tool}`, row);
+      bump(e.agent, 'tools');
       pulse(namesIn(e.args), e.agent);
       break;
     }
     case 'tool_result': {
-      const el = pendingTools.get(`${e.agent}:${e.tool}`);
-      if (el) {
-        el.querySelector('.ms').textContent = `${e.cypher.length} cypher · ${e.ms}ms`;
-        el.insertAdjacentHTML('beforeend', `<details><summary>result & cypher</summary><pre>${esc(JSON.stringify(e.result, null, 1)).slice(0, 3000)}</pre>${e.cypher.map((q) => `<pre>${esc(q.query)}</pre>`).join('')}</details>`);
+      const row = pendingTools.get(`${e.agent}:${e.tool}`);
+      if (row && e.tool !== 'record_finding' && e.tool !== 'record_decision') {
+        row.querySelector('.ms').textContent = `${e.cypher.length}q · ${e.ms}ms`;
+        row.querySelector('details').insertAdjacentHTML('beforeend', `${e.cypher.map((q) => `<pre>${esc(q.query)}</pre>`).join('')}<pre class="res">${esc(JSON.stringify(e.result, null, 1)).slice(0, 2500)}</pre>`);
       }
+      bump(e.agent, 'queries', e.cypher.length);
       logCypher(e);
       if (e.tool !== 'record_finding') pulse(namesIn(e.result).slice(0, 25), e.agent);
       break;
     }
     case 'finding':
-      add(`<div class="head">${chip(e.agent)}<span class="kind">${esc(e.kind.replace('_', ' '))}</span></div><div>${md(e.summary)}</div>
-        <div>${(e.evidence || []).map((x) => `<span class="pill" data-focus="${esc(x)}">${esc(x)}</span>`).join('')}</div>
-        <div class="conf"><i style="width:${Math.round((e.confidence ?? 0.7) * 100)}%"></i></div>`, `${e.agent} finding`);
+      add(findingHtml(e), `finding ${e.agent}`, section(e.agent).body);
+      bump(e.agent, 'findings');
       break;
     case 'memory':
-      add(`<div class="head">${chip(e.agent)}<span class="kind">learned</span></div><div>🧠 Remembered about <b>${esc(e.service)}</b>: ${esc(e.fact)}</div>`, `${e.agent} finding`);
+      add(`🧠 Remembered: <b>${esc(e.service)}</b>: ${esc(e.fact)}`, `finding ${e.agent}`, section(e.agent).body);
       break;
     case 'decision':
       renderDecision(e);
       break;
     case 'verification':
-      add(proofHtml(e), `proof ${e.verdict}`);
+      slot('proof').innerHTML = `<details class="proof ${esc(e.verdict)}"><summary>${proofSummary(e)}</summary>${proofHtml(e)}</details>`;
       pulse([e.root_cause, ...(e.explained || []).flatMap((x) => x.path)], 'commander');
       break;
-    case 'citations':
-      add(`${e.unknown.length ? '⚠' : '✓'} ${e.verified}/${e.checked} cited nodes exist in the graph${e.unknown.length ? ` · unknown: ${esc(e.unknown.join(', '))}` : ''}`, `cites ${e.unknown.length ? 'bad' : ''}`);
+    case 'citations': {
+      const s = section(e.agent);
+      s.sec.querySelector('.sec-text').insertAdjacentHTML('beforeend', `<div class="cites ${e.unknown.length ? 'bad' : ''}">${e.unknown.length ? '⚠' : '✓'} ${e.verified}/${e.checked} cited nodes exist in the graph${e.unknown.length ? ` · unknown: ${esc(e.unknown.join(', '))}` : ''}</div>`);
       break;
+    }
     case 'actions':
       renderActions(e.actions);
       break;
     case 'notice':
-      add(`⚠ ${chip(e.agent || 'orchestrator')} ${esc(e.text)}`, 'notice');
+      add(`⚠ ${esc(e.text)}`, 'notice', e.agent && state.sections?.[e.agent] ? state.sections[e.agent].body : null);
       break;
-    case 'agent_done':
-      if (e.text) add(`<div class="head">${chip(e.agent)}<span class="ms">done</span></div><div>${md(e.text)}</div>`, `${e.agent} say`);
+    case 'agent_done': {
+      const s = section(e.agent);
+      s.sec.querySelector('.st').textContent = 'done';
+      s.sec.classList.add('done');
+      if (e.text) s.sec.querySelector('.sec-text').insertAdjacentHTML('afterbegin', `<div class="say">${md(e.text)}</div>`);
+      if (e.agent === 'commander' || e.agent === 'chat') s.sec.classList.add('collapsed');
       break;
+    }
     case 'done':
-      if (e.stats) add(`✓ ${e.stats.tools} tool calls · ${e.stats.queries} Cypher queries · ${(e.stats.ms / 1000).toFixed(1)}s`, 'handoff');
+      if (e.stats && $('#brief-stats')) $('#brief-stats').textContent = `✓ ${e.stats.tools} tools · ${e.stats.queries} queries · ${(e.stats.ms / 1000).toFixed(1)}s`;
+      tl().scrollTo({ top: 0, behavior: 'smooth' });
       break;
     case 'error':
       add(`✖ ${esc(e.text)}`, 'notice');
@@ -267,18 +335,20 @@ function onEvent(e) {
   }
 }
 
+function proofSummary(p) {
+  return `<span class="verdict ${esc(p.verdict)}">${esc(p.verdict)}</span> <b>Proof gate</b> <span class="ms">${esc(p.reason || '')}</span>`;
+}
 function proofHtml(p) {
-  return `<div class="head"><span><span class="verdict ${esc(p.verdict)}">${esc(p.verdict)}</span> <b>Proof gate</b> · causal path required</span><span class="ms">algo.SPpaths · algo.maxFlow</span></div>
-    <div>${esc(p.reason)}${p.isolation_min_cut != null ? ` · isolating it takes ≥ ${p.isolation_min_cut} link cut(s) (max-flow)` : ''}</div>
+  return `<div class="ms">Causal path required · algo.SPpaths · algo.maxFlow${p.isolation_min_cut != null ? ` · isolating it takes ≥ ${p.isolation_min_cut} link cut(s)` : ''}</div>
     ${(p.explained || []).map((x) => `<div class="path">${esc(x.path.join(' → '))}</div>`).join('')}
     ${p.unexplained?.length ? `<div class="path bad">no causal path: ${esc(p.unexplained.join(', '))}</div>` : ''}
     ${p.deploy ? `<div class="path">${esc(p.deploy.id)} on ${esc(p.deploy.service || '?')}: ${p.deploy.adjacent ? 'adjacent' : 'NOT adjacent'}, ${p.deploy.recent ? 'recent' : 'NOT recent'}</div>` : ''}`;
 }
 
 function renderActions(actions) {
-  const el = document.createElement('div');
-  el.className = 'actions-card';
-  el.innerHTML = `<div class="head"><b>⚡ Proposed actions</b><span class="ms">nothing is sent until you approve</span></div>
+  const box = document.createElement('div');
+  box.className = 'actions-card';
+  box.innerHTML = `<div class="ac-head"><b>⚡ Proposed actions</b><span class="ms">nothing is sent until you approve</span></div>
     ${actions.map((a) => `<div class="act" data-act="${esc(a.id)}">
       <div class="head"><span>${a.kind === 'page' ? '📟' : '🐙'} ${esc(a.summary)}</span>
         <span class="chan ${a.channel === 'dry-run' ? 'dry' : 'live'}">${esc(a.channel)}</span></div>
@@ -287,14 +357,13 @@ function renderActions(actions) {
         ? `<button class="primary" data-approve="${esc(a.id)}">Approve & ${a.channel === 'dry-run' ? 'dry-run' : 'send'}</button>`
         : `<span class="status ${esc(a.status)}">${esc(a.status)}</span> ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.url)}</a>` : esc(a.result || '')}`}</div>
     </div>`).join('')}`;
-  tl().appendChild(el);
-  tl().scrollTop = tl().scrollHeight;
+  const s = slot('actions'); s.innerHTML = ''; s.appendChild(box);
 }
 
 function renderDecision(d) {
-  const el = document.createElement('div');
-  el.className = 'decision';
-  el.innerHTML = `<h3><span class="sev">${esc(d.severity)}</span>${esc(d.title)} ${d.verdict ? `<span class="verdict ${esc(d.verdict)}">${esc(d.verdict)}</span>` : ''}</h3>
+  const card = document.createElement('div');
+  card.className = 'decision';
+  card.innerHTML = `<h3><span class="sev">${esc(d.severity)}</span>${esc(d.title)} ${d.verdict ? `<span class="verdict ${esc(d.verdict)}">${esc(d.verdict)}</span>` : ''}</h3>
     <dl>
       <dt>Root cause</dt><dd><span class="pill" data-focus="${esc(d.root_cause)}">${esc(d.root_cause)}</span></dd>
       ${d.suspect_deploy ? `<dt>Suspect</dt><dd><span class="pill" data-focus="${esc(d.suspect_deploy)}">${esc(d.suspect_deploy)}</span></dd>` : ''}
@@ -303,11 +372,12 @@ function renderDecision(d) {
       <dt>Action</dt><dd>${md(d.action)}</dd>
     </dl>
     <div class="actions"><button class="primary" data-resolve>Fix worked: remember</button><button data-failed>Didn't work</button><button data-why>Why?</button></div>`;
-  tl().appendChild(el);
-  tl().scrollTop = tl().scrollHeight;
+  const s = slot('decision'); s.innerHTML = ''; s.appendChild(card);
 }
 
 document.addEventListener('click', async (e) => {
+  const tg = e.target.closest('[data-toggle]');
+  if (tg) tg.parentElement.classList.toggle('collapsed');
   const f = e.target.closest('[data-focus]');
   if (f) focus(f.dataset.focus);
   if (e.target.matches('[data-why]')) { switchTab('trace'); await showTrace(state.investigationId); }
@@ -317,7 +387,7 @@ document.addEventListener('click', async (e) => {
     if (resolution === null) { e.target.disabled = false; return; }
     const r = await api(`/api/investigations/${state.investigationId}/resolve`, { method: 'POST', body: { resolution } });
     e.target.textContent = `Learned as ${r.incident} ✓`;
-    add(`🧠 Stored <b>${esc(r.incident)}</b> in episodic memory (resolved by ${esc(r.resolved_by)}). The runbook's success count went up. The next investigation will recall it.`, 'finding historian');
+    slot('note').innerHTML = `<div class="note">🧠 Stored <b>${esc(r.incident)}</b> in episodic memory (resolved by ${esc(r.resolved_by)}). The runbook's success count went up, and the next investigation will recall it.</div>`;
     await loadGraph(); await loadMemory();
   }
   if (e.target.matches('[data-failed]')) {
@@ -325,7 +395,7 @@ document.addEventListener('click', async (e) => {
     if (resolution === null) return;
     const r = await api(`/api/investigations/${state.investigationId}/resolve`, { method: 'POST', body: { resolution, outcome: 'failed' } });
     e.target.disabled = true; e.target.textContent = 'Recorded as failed';
-    add(`🧠 Recorded the failure.${r.runbook_penalised ? ` ${esc(r.runbook_penalised)} lost rank in procedural memory.` : ''} Investigate again and the agents will prefer the next-best option.`, 'finding historian');
+    slot('note').innerHTML = `<div class="note">🧠 Recorded the failure.${r.runbook_penalised ? ` ${esc(r.runbook_penalised)} lost rank in procedural memory.` : ''} Investigate again and the agents will prefer the next-best option.</div>`;
     await loadGraph(); await loadMemory();
   }
   if (e.target.matches('[data-approve]')) {
@@ -371,7 +441,10 @@ RETURN d, f, e</pre>`;
   state.layers.add('Agent state'); renderLayers(); renderGraph();
   const names = [d.id, d.root_cause, d.suspect_deploy, d.runbook, ...d.paged, ...inv.findings.flatMap((f) => [f.id, ...f.evidence])];
   const ids = names.map((n) => state.byName.get(n)?.id).filter((x) => x !== undefined && state.nodesDS?.get(x));
-  state.network?.selectNodes(ids);
+  for (const id of ids) {
+    const n = state.graph.nodes.find((x) => x.id === id);
+    if (n) state.nodesDS.update({ ...visNode(n), label: nodeLabel(n), borderWidth: 4, color: { ...visNode(n).color, border: '#ffc24b' } });
+  }
   state.network?.fit({ nodes: ids, animation: true });
 }
 
@@ -387,14 +460,20 @@ async function loadMemory() {
 async function openInvestigation(id) {
   const inv = await api(`/api/investigations/${id}`);
   state.investigationId = id;
-  tl().innerHTML = '';
-  add(`<div class="head"><b>${esc(id)}</b><span class="ms">from memory · ${esc(inv.status)}</span></div><div>${esc(inv.question)}</div>`, 'say');
-  for (const f of inv.findings) onEvent({ type: 'finding', ...f });
-  for (const t of inv.turns.slice(1)) add(`<div class="head">${chip(t.agent || t.role)}</div><div>${md(t.text)}</div>`, `${t.agent || ''} say`);
-  if (inv.decision?.verdict) add(`<div class="head"><span><span class="verdict ${esc(inv.decision.verdict)}">${esc(inv.decision.verdict)}</span> <b>Proof gate</b></span></div><div>${esc(inv.decision.proof || '')}</div>`, `proof ${esc(inv.decision.verdict)}`);
+  resetTimeline();
+  slot('head').innerHTML = `<div class="brief-head"><span><b>${esc(id)}</b> · from memory</span><span class="status ${esc(inv.status)}">${esc(inv.status)}</span></div><div class="q">${esc(inv.question)}</div>`;
   if (inv.decision) renderDecision({ ...inv.decision, page: inv.decision.paged });
+  if (inv.decision?.verdict) slot('proof').innerHTML = `<details class="proof ${esc(inv.decision.verdict)}"><summary>${proofSummary({ verdict: inv.decision.verdict, reason: inv.decision.proof })}</summary></details>`;
   if (inv.decision) api(`/api/investigations/${id}/actions`).then((acts) => acts.length && renderActions(acts)).catch(() => {});
-  if (inv.status === 'resolved') tl().querySelector('.decision:last-of-type .actions')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
+  if (inv.status === 'resolved') $('#brief .decision .actions')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
+  for (const f of inv.findings) { add(findingHtml(f), `finding ${f.agent}`, section(f.agent).body); bump(f.agent, 'findings'); }
+  for (const t of inv.turns.slice(1)) {
+    const who = t.agent || t.role;
+    const s = section(who);
+    s.sec.querySelector('.sec-text').insertAdjacentHTML('beforeend', `<div class="say">${md(t.text)}</div>`);
+    s.sec.querySelector('.st').textContent = 'done';
+    s.sec.classList.add('done', 'collapsed');
+  }
   $('#chatform').classList.remove('hidden');
   await showTrace(id); switchTab('trace');
 }
@@ -445,7 +524,7 @@ async function run(path, body) {
 }
 
 $('#go').addEventListener('click', async () => {
-  tl().innerHTML = '';
+  resetTimeline();
   $('#tab-cypher').innerHTML = '';
   await run('/api/investigate', { question: $('#question').value, user: $('#user').value });
   $('#chatform').classList.remove('hidden');
