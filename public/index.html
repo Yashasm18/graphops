@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GraphOps</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">◈</span> GraphOps <span class="tag">incident commander on FalkorDB</span></div>
+  <div class="controls">
+    <label>Tenant <select id="tenant"></select></label>
+    <label>You <input id="user" value="yash" size="8"></label>
+    <span id="mode" class="badge">…</span>
+    <button id="seed" class="ghost" title="Wipe and re-seed this tenant graph">Seed graph</button>
+    <button id="refire" class="ghost" title="Fire the demo alerts again; memory is kept">Re-fire alerts</button>
+  </div>
+</header>
+
+<main>
+  <section class="left">
+    <div class="card ask">
+      <textarea id="question" rows="2">Checkout is throwing 500s and customers can't pay. What's going on?</textarea>
+      <div class="row">
+        <button id="go" class="primary">Investigate ▸</button>
+        <span class="hint">3 agents · shared graph state · persistent memory</span>
+      </div>
+    </div>
+    <div id="timeline" class="timeline">
+      <div class="empty">
+        <p><b>How it works</b></p>
+        <ol>
+          <li><span class="chip triage">Triage</span> traverses the dependency graph, runs PageRank/betweenness and correlates deploys to find the root cause and blast radius.</li>
+          <li><span class="chip historian">Historian</span> runs <i>in parallel</i>. It recalls past incidents, runbooks, ADRs and facts learned in earlier sessions.</li>
+          <li><span class="chip commander">Commander</span> reads both agents' findings <i>from the graph</i>, picks who to page, and records a Decision linked to its evidence.</li>
+          <li>Resolve it, and the investigation becomes an Incident in memory. The next session will find it.</li>
+        </ol>
+      </div>
+    </div>
+    <form id="chatform" class="card chat hidden">
+      <input id="chatmsg" placeholder="Ask a follow-up, e.g. who else knows payments-db?  or teach a fact…" autocomplete="off">
+      <button class="primary">Ask</button>
+    </form>
+  </section>
+
+  <section class="center">
+    <div class="graphbar">
+      <div id="layers"></div>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div id="graph"></div>
+    <div id="legend"></div>
+  </section>
+
+  <section class="right">
+    <nav class="tabs">
+      <button data-tab="trace" class="active">Why? trace</button>
+      <button data-tab="cypher">Cypher log</button>
+      <button data-tab="memory">Memory</button>
+    </nav>
+    <div id="tab-trace" class="tab active"><div class="empty">The decision's evidence chain will appear here: Decision → Findings → graph nodes.</div></div>
+    <div id="tab-cypher" class="tab"><div class="empty">Every graph query the agents run is logged here.</div></div>
+    <div id="tab-memory" class="tab"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
