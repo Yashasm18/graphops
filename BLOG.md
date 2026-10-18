@@ -60,7 +60,7 @@ WITH c, alerting, collect(DISTINCT a.name) AS explains, max(length(p)) AS depth
 ```
 
 That candidate is then boosted if it is alerting itself, if none of its own dependencies alert (it's the *deepest* failure),
-and if a deploy landed on it or on a direct dependent in the last three hours. For the demo scenario it picks `payments-db`,
+and if a deploy landed on it or on a direct dependent in the last three hours. In the Acme scenario it picks `payments-db`,
 which explains alerts on five services, and flags `DEP-981`, a retry change on `payments-service` shipped 23 minutes earlier.
 
 FalkorDB's built-in algorithms are tools too: `algo.pageRank` and `algo.betweenness` find load-bearing services
@@ -89,7 +89,7 @@ get **separate graphs in one FalkorDB instance** (`graphops_acme`, `graphops_glo
 
 ## Surviving the free tier
 
-Free-tier LLM quotas and live demos don't mix. GraphOps retries 429s using the server's `retryDelay`, then steps down
+Free-tier LLM quotas are tight. GraphOps retries 429s using the server's `retryDelay`, then steps down
 to a lighter model. If the LLM is still unavailable, each agent switches to a **scripted playbook** that calls the *same*
 graph tools and writes the *same* findings and decisions. The graph does the reasoning, and the LLM picks tools and
 writes the summary. The scripted mode reaching the same answer is a decent sign the context layer is doing the heavy lifting.

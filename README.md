@@ -18,7 +18,6 @@ Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It ta
 | **Tracks entered** | **Track 1: Agents That Act on Connected Data** (primary), Track 2: Agent Memory and Coordination, Track 3: Company Brain |
 | **FalkorDB's role** | The agents' only context layer. Every tool is a Cypher query or FalkorDB algorithm, and agent findings, decisions, conversation turns and learned incidents are written back into the graph. Without FalkorDB there is nothing for the agents to reason over, share or remember. |
 | **Data** | 100% synthetic: fictional companies (Acme Shop, Globex Stream), people, services and incidents written for this project. No private or restricted data. |
-| **Demo video** | _link to be added_ |
 | **Run it** | `docker compose up --build`, or see [Run it](#run-it) |
 | **AI assistance** | Built with an AI coding assistant. See [AI assistance disclosure](#ai-assistance-disclosure) |
 
@@ -118,7 +117,7 @@ FalkorDB options:
 * **FalkorDB Cloud:** set `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD` (and `FALKORDB_TLS=true` if your instance uses TLS).
 
 **No LLM key or rate-limited?** Set `GRAPHOPS_SCRIPTED=true`, or let it fall back by itself. Each agent then runs a deterministic
-playbook over the *same* graph tools and writes the *same* findings and decisions, so the demo never breaks. With Gemini,
+playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
 the agents choose their own tools. On a 429 they back off and step down from `gemini-3.8-flash` to `gemini-3.5-flash-lite`.
 
 ### Use the graph tools from Claude, Cursor or any MCP client
@@ -135,18 +134,6 @@ the agents choose their own tools. On a 429 they back off and step down from `ge
 }
 ```
 
-## Demo script (3 minutes)
-
-1. Show the graph: 25 services, 7 teams, 14 people, deploys, alerts, incidents, runbooks and ADRs. Toggle the layers.
-2. Click **Investigate**. Triage and Historian run in parallel, and nodes pulse in each agent's colour.
-3. Open a tool card and show the Cypher. Open the **Cypher log**.
-4. The Commander's decision card appears. Click **Why?** to walk Decision → Findings → evidence nodes.
-5. Ask a follow-up: *"who else knows payments-db, and why did we add pgbouncer?"* The answer cites ADR-014 and Nina.
-6. Teach a fact: *"remember that payments-db max_connections was raised to 800 last week"*. It becomes a `Fact` node.
-7. Click **Mark resolved & remember**. The investigation becomes `INC-xxxx`, and RB-PAY-01's success count goes up.
-8. Click **Re-fire alerts**, then **Investigate** again. The Historian now recalls the incident it learned a minute ago,
-   and the fact you taught it. That is memory across sessions.
-9. Switch tenant to **Globex**. It's a different, isolated graph in the same FalkorDB instance, with different answers.
 
 ## Graph model
 

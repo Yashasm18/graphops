@@ -1,4 +1,4 @@
-# One-command demo: FalkorDB + GraphOps.
+# One-command setup: FalkorDB + GraphOps.
 #   GEMINI_API_KEY=... docker compose up
 # Without a key the agents run their scripted graph playbooks.
 services:

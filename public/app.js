@@ -370,7 +370,7 @@ $('#seed').addEventListener('click', async () => {
 $('#refire').addEventListener('click', async () => {
   await api('/api/reset-scenario', { method: 'POST', body: {} });
   await loadGraph();
-  add('🔔 Demo alerts re-fired. Learned memory was kept.', 'notice');
+  add('🔔 Alerts re-fired. Learned memory was kept.', 'notice');
 });
 $('#tenant').addEventListener('change', async (e) => {
   state.tenant = e.target.value; state.investigationId = null;

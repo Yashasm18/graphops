@@ -299,7 +299,7 @@ export async function seedTenant(tenant, { reset = true } = {}) {
   return counts;
 }
 
-// Re-fire the demo alerts and shift deploy times so the scenario is "live"
+// Re-fire the scenario alerts and shift deploy times so the scenario is "live"
 // again, without touching anything the agents have learned (memory survives).
 export async function resetScenario(tenant) {
   const spec = TENANTS[tenant];
