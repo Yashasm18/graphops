@@ -176,6 +176,7 @@ function namesIn(obj) {
 function focus(name) {
   const n = state.byName.get(name);
   if (!n || !state.network) return;
+  if (isMobile()) setView('center');
   if (!state.nodesDS.get(n.id)) {
     state.layers.add(layerOf(n)); renderLayers(); renderGraph();
   }
@@ -198,6 +199,31 @@ $('#layers').addEventListener('change', (e) => {
   renderLayers(); renderGraph();
 });
 $('#layers').addEventListener('click', (e) => { if (e.target.matches('[data-fit]')) state.network?.fit({ animation: true }); });
+
+
+// ---------------- Phone / tablet view switcher ----------------
+const mobileQ = window.matchMedia('(max-width: 1023px)');
+const isMobile = () => mobileQ.matches;
+function setView(v) {
+  document.querySelector('main').dataset.view = v;
+  document.querySelectorAll('.mnav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+  document.querySelector(`.mnav button[data-view="${v}"]`)?.classList.remove('dot');
+  if (v === 'center' && state.network) {
+    // The canvas was sized while hidden: resize, then frame the evidence (or everything).
+    setTimeout(() => {
+      state.network.setSize('100%', '100%');
+      state.network.redraw();
+      const ids = (state.traceIds || []).filter((id) => state.nodesDS.get(id));
+      state.network.fit(ids.length ? { nodes: ids, animation: false } : { animation: false });
+    }, 60);
+  }
+}
+function hint(v) { if (isMobile() && document.querySelector('main').dataset.view !== v) document.querySelector(`.mnav button[data-view="${v}"]`)?.classList.add('dot'); }
+document.querySelector('.mnav').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
+function sizeHeader() { document.documentElement.style.setProperty('--hdr', `${document.querySelector('header').offsetHeight}px`); }
+window.addEventListener('resize', () => { sizeHeader(); if (state.network) { state.network.redraw(); } });
+mobileQ.addEventListener?.('change', () => { sizeHeader(); setView(document.querySelector('main').dataset.view || 'left'); });
+sizeHeader();
 
 // ---------------- Timeline ----------------
 // Layout: a brief card pinned on top (decision, proof, actions), then one
@@ -304,6 +330,7 @@ function onEvent(e) {
       break;
     case 'decision':
       renderDecision(e);
+      hint('center'); hint('right');
       break;
     case 'verification':
       slot('proof').innerHTML = `<details class="proof ${esc(e.verdict)}"><summary>${proofSummary(e)}</summary>${proofHtml(e)}</details>`;
@@ -383,7 +410,7 @@ document.addEventListener('click', async (e) => {
   if (tg) tg.parentElement.classList.toggle('collapsed');
   const f = e.target.closest('[data-focus]');
   if (f) focus(f.dataset.focus);
-  if (e.target.matches('[data-why]')) { switchTab('trace'); await showTrace(state.investigationId); }
+  if (e.target.matches('[data-why]')) { switchTab('trace'); if (isMobile()) setView('right'); await showTrace(state.investigationId); }
   if (e.target.matches('[data-resolve]')) {
     e.target.disabled = true;
     const resolution = prompt('How was it resolved?', 'Rolled back the suspect deploy and followed the runbook. Error rates recovered.');
@@ -448,6 +475,7 @@ RETURN d, f, e</pre>`;
     const n = state.graph.nodes.find((x) => x.id === id);
     if (n) state.nodesDS.update({ ...visNode(n), label: nodeLabel(n), borderWidth: 4, color: { ...visNode(n).color, border: '#ffc24b' } });
   }
+  state.traceIds = ids;
   state.network?.fit({ nodes: ids, animation: true });
 }
 
@@ -527,6 +555,8 @@ async function run(path, body) {
 }
 
 $('#go').addEventListener('click', async () => {
+  state.traceIds = [];
+  if (isMobile()) setView('left');
   resetTimeline();
   $('#tab-cypher').innerHTML = '';
   await run('/api/investigate', { question: $('#question').value, user: $('#user').value });

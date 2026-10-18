@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>GraphOps</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -13,15 +16,15 @@
 <header>
   <div class="brand"><span class="logo">◈</span> GraphOps <span class="tag">incident commander on FalkorDB</span></div>
   <div class="controls">
-    <label>Tenant <select id="tenant"></select></label>
-    <label>You <input id="user" value="yash" size="8"></label>
+    <label><span class="lbl">Tenant</span> <select id="tenant" aria-label="Tenant"></select></label>
+    <label><span class="lbl">You</span> <input id="user" value="yash" size="8" aria-label="Your name"></label>
     <span id="mode" class="badge">…</span>
     <button id="seed" class="ghost" title="Wipe and re-seed this tenant graph">Seed graph</button>
     <button id="refire" class="ghost" title="Fire the scenario alerts again; memory is kept">Re-fire alerts</button>
   </div>
 </header>
 
-<main>
+<main data-view="left">
   <section class="left">
     <div class="card ask">
       <textarea id="question" rows="2">Checkout is throwing 500s and customers can't pay. What's going on?</textarea>
@@ -71,6 +74,11 @@
     <div id="tab-memory" class="tab"></div>
   </section>
 </main>
+<nav class="mnav" aria-label="Views">
+  <button data-view="left" class="active"><span class="ic">◉</span>Agents</button>
+  <button data-view="center"><span class="ic">◈</span>Graph</button>
+  <button data-view="right"><span class="ic">≡</span>Details</button>
+</nav>
 <script src="app.js"></script>
 </body>
 </html>
