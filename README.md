@@ -20,11 +20,12 @@ Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It ta
 | | |
 | --- | --- |
 | **Tracks entered** | **Track 1: Agents That Act on Connected Data** (primary), Track 2: Agent Memory and Coordination, Track 3: Company Brain |
-| **FalkorDB's role** | The agents' only context layer. Every tool is a Cypher query or FalkorDB algorithm, and agent findings, decisions, conversation turns and learned incidents are written back into the graph. Without FalkorDB there is nothing for the agents to reason over, share or remember. |
-| **Data** | **Real public topology:** the `otel` tenant is imported from the open-source [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (its real compose wiring and its 20 real fault flags) by `npm run import:otel`. **Synthetic:** the Acme and Globex companies, and all people, ownership and revenue. No private or restricted data. |
+| **FalkorDB's role** | The agents' only context layer. Every tool is a Cypher query or FalkorDB algorithm, and agent findings, decisions, conversation turns and learned incidents are written back into the graph. There is no other database: with FalkorDB unreachable the API fails closed (`/api/status` returns 503) and no agent can run. |
+| **Data** | See [data/README.md](data/README.md). **Real public topology:** the `otel` tenant is imported from the open-source [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (its real compose wiring and its 20 real fault flags) by `npm run import:otel`. **Synthetic:** the Acme and Globex companies, and all people, ownership and revenue. No private or restricted data. |
 | **Live deployment** | https://graphops-gr4u.onrender.com (Render + FalkorDB Cloud; a private `GRAPH.COPY` sandbox per visitor) |
 | **Run it** | `docker compose up --build`, or see [Run it](#run-it) |
-| **AI assistance** | Built with an AI coding assistant. See [AI assistance disclosure](#ai-assistance-disclosure) |
+| **AI assistance** | Built with Claude Code (AI coding assistant). See [AI assistance disclosure](#ai-assistance-disclosure) |
+| **How it works** | [docs/EXPLAINER.md](docs/EXPLAINER.md): architecture, graph model, queries and design decisions in plain language |
 
 ## Why a graph
 
@@ -83,17 +84,17 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
 * **Chat** answers follow-ups with every tool plus guarded read-only text-to-Cypher. It loads the conversation
   history *from the graph* (`(:Investigation)-[:HAS_TURN]->(:Turn)-[:NEXT]->(:Turn)`), and `remember_fact` lets it learn from users.
 
-### Proof, not vibes
+### How GraphOps checks its own answers
 
-The LLM proposes. **The graph decides.**
+Gemini can suggest a root cause, but **nothing is stored until FalkorDB backs it up with a causal path.**
 
-* **No path, no claim.** `record_decision` runs a proof gate before anything is stored. `algo.SPpaths` must return a causal
+* **Causal-path gate.** `record_decision` runs a proof gate before anything is stored. `algo.SPpaths` must return a causal
   `DEPENDS_ON` path from the alerting services to the claimed root cause, the suspect deploy must be adjacent and recent, and a
   silent (healthy) node also needs failing direct callers. `algo.maxFlow` reports how many links you would have to cut to isolate it.
   The verdict is `VERIFIED`, `WEAK` or `REJECTED`. A rejected claim is sent back to the Commander to fix.
 * **Citations are checked.** Every id an agent mentions (`INC-2041`, `DEP-981`, `` `payments-db` ``…) is looked up in the graph,
   and the UI shows `✓ 6/6 cited nodes exist in the graph`, or flags the unknown ones.
-* **Simulate before you act.** `what_if` and `containment_plan` copy the tenant graph with `GRAPH.COPY` and run on the copy.
+* **Fixes are tried on a copy first.** `what_if` and `containment_plan` copy the tenant graph with `GRAPH.COPY` and run on the copy.
   Containment tries every combination of up to three fallback modes and picks the smallest set that protects the most revenue,
   then **replays it** on the sandbox (real `DELETE`s, recomputed impact) to prove it. Example: in a Kafka outage, turning on two
   outbox fallbacks *together* keeps **Checkout & Payments ($4,200/min)** up. Neither one does it alone.
@@ -146,7 +147,7 @@ broke" look the same in the graph. GraphOps keeps the true cause in its top 3 (7
 
 | Track | What GraphOps does |
 | --- | --- |
-| **1 · Act on connected data** | Multi-hop root-cause scoring (tested on the **real OpenTelemetry Demo topology and fault flags**), blast radius with revenue impact, **human-approved real actions** (Discord/Slack page, GitHub incident issue), shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
+| **1 · Act on connected data** | Multi-hop root-cause scoring (tested on the **real OpenTelemetry Demo topology and fault flags**), blast radius with revenue impact, **human-approved real actions** (Discord/Slack page, GitHub incident issue), shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **causal-path proof gate** (`algo.SPpaths` + `algo.maxFlow`), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
 | **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (Runbook success counts) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, and **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`) |
 | **3 · Company brain** | People, teams, **projects, tickets, Slack messages**, services, capabilities, deploys, docs, ADRs and incidents in one graph. `trace_change` follows a deploy to its ticket, project and chat thread and surfaces **warnings that were raised and ignored**. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
 
@@ -387,11 +388,16 @@ OPTIONAL MATCH (tk)-[:FOLLOWS_UP]->(dec:Decision) RETURN tk.id, tk.title, dec.id
 
 ## AI assistance disclosure
 
-As the rules require: this project was built with the help of **Claude Code** (Anthropic), an AI coding assistant.
-It generated much of the code, the seed data and the docs under my direction. I chose the problem and the tracks,
-and set up FalkorDB Cloud and the Gemini API. The system was tested end to end against a live FalkorDB Cloud instance,
-and issues found in testing were fixed along the way (model fallback, root-cause grounding, pagee matching).
-At runtime, the agents themselves use Google Gemini through function calling.
+As the rules require: GraphOps was built with **Claude Code** (Anthropic), an AI coding assistant, and the agents use
+**Google Gemini** at runtime.
+
+* **Claude Code** proposed the idea, and wrote most of the code, seed data, tests, benchmarks and documentation. It also ran
+  the tests and benchmarks and fixed the issues they found.
+* **The author (Yashas M)** directed the work and made the calls. That includes going for an entry that covers all three tracks,
+  choosing Gemini and FalkorDB Cloud, and asking for the competitor comparison, the real-world actions, the public OpenTelemetry
+  data and the README changes. The author set up and connected every external service (FalkorDB Cloud, the Gemini API, GitHub,
+  Render, the Discord webhook and the GitHub issues token), and verified the live deployment, including a real approved page and GitHub issue.
+* [docs/EXPLAINER.md](docs/EXPLAINER.md) documents the architecture, graph model, queries and design decisions in plain language.
 
 ## License
 

@@ -1,5 +1,5 @@
-// Proof layer: the model proposes, the graph decides.
-// - verifyRootCause: "no path, no claim". A root cause is accepted only if
+// Proof layer: a root cause suggested by an agent is only stored once the graph backs it up.
+// - verifyRootCause: causal-path gate. A root cause is accepted only if
 //   algo.SPpaths finds a causal DEPENDS_ON path from the alerting services to it.
 // - whatIf / containmentPlan: simulate failures and fixes on a GRAPH.COPY
 //   sandbox, so the real graph is never touched.

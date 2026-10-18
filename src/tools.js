@@ -345,7 +345,7 @@ export const TOOLS = {
 
   // ---------- Proof and simulation ----------
   verify_root_cause: {
-    description: 'No path, no claim. Check a root-cause hypothesis against the graph. algo.SPpaths must find a causal DEPENDS_ON path from the alerting services, the suspect deploy must be adjacent and recent, and algo.maxFlow gives the minimum number of links to cut to isolate the node. Returns VERIFIED, WEAK or REJECTED.',
+    description: 'Causal-path gate. Check a root-cause hypothesis against the graph. algo.SPpaths must find a causal DEPENDS_ON path from the alerting services, the suspect deploy must be adjacent and recent, and algo.maxFlow gives the minimum number of links to cut to isolate the node. Returns VERIFIED, WEAK or REJECTED.',
     parameters: { type: 'object', properties: { root_cause: str, suspect_deploy: str }, required: ['root_cause'] },
     async run(t, args) { return verifyRootCause(t, args); },
   },
@@ -471,7 +471,7 @@ export const TOOLS = {
       required: ['title', 'root_cause', 'action', 'rationale', 'page', 'severity'],
     },
     async run(t, a, ctx) {
-      // No path, no claim: the graph must prove the root cause before it is recorded.
+      // Causal-path gate: the graph must back up the root cause before it is recorded.
       const proof = await verifyRootCause(t, { root_cause: a.root_cause, suspect_deploy: a.suspect_deploy });
       ctx.emit?.({ type: 'verification', agent: ctx.agent, ...proof });
       if (proof.verdict === 'REJECTED' && !ctx.gateOverride) {

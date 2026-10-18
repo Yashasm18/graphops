@@ -78,7 +78,13 @@ function stream(handler) {
   };
 }
 
-app.get('/api/status', wrap(async (req) => {
+app.get('/api/status', async (req, res, next) => {
+  // Fail closed: without FalkorDB there is nothing for the agents to reason over.
+  try { await listTenants(); } catch (err) {
+    return res.status(503).json({ error: `FalkorDB unreachable (${err.message}). GraphOps has no fallback store: every tool, memory and decision lives in the graph.` });
+  }
+  next();
+}, wrap(async (req) => {
   const seeded = await listTenants();
   return {
     llm: llmEnabled(),

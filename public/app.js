@@ -268,7 +268,7 @@ function onEvent(e) {
 }
 
 function proofHtml(p) {
-  return `<div class="head"><span><span class="verdict ${esc(p.verdict)}">${esc(p.verdict)}</span> <b>Proof gate</b> · no path, no claim</span><span class="ms">algo.SPpaths · algo.maxFlow</span></div>
+  return `<div class="head"><span><span class="verdict ${esc(p.verdict)}">${esc(p.verdict)}</span> <b>Proof gate</b> · causal path required</span><span class="ms">algo.SPpaths · algo.maxFlow</span></div>
     <div>${esc(p.reason)}${p.isolation_min_cut != null ? ` · isolating it takes ≥ ${p.isolation_min_cut} link cut(s) (max-flow)` : ''}</div>
     ${(p.explained || []).map((x) => `<div class="path">${esc(x.path.join(' → '))}</div>`).join('')}
     ${p.unexplained?.length ? `<div class="path bad">no causal path: ${esc(p.unexplained.join(', '))}</div>` : ''}
