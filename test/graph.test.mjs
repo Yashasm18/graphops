@@ -60,9 +60,19 @@ test('containment plan finds the two outbox fallbacks for a Kafka outage', async
   assert.ok(r.verified_by_replay);
 });
 
-test('full-text knowledge search finds the retry-storm incident', async () => {
+test('full-text search finds the retry-storm incident and the chat about it', async () => {
   const r = await runTool(T, 'search_knowledge', { text: 'retry' }, ctx);
-  assert.equal(r[0].id, 'INC-2041');
+  assert.ok(r.some((x) => x.id === 'INC-2041'));
+  assert.ok(r.some((x) => x.label === 'Message'));
+});
+
+test('company brain: trace a deploy to its ticket, project and the ignored warning', async () => {
+  const r = await runTool(T, 'trace_change', { deploy: 'DEP-981' }, ctx);
+  assert.equal(r.ticket, 'PAY-412');
+  assert.equal(r.project, 'Payments reliability Q4');
+  assert.equal(r.warnings_raised[0].by, 'Diego Alvarez');
+  assert.equal(r.open_follow_ups[0].ticket, 'PAY-388');
+  assert.equal(r.open_follow_ups[0].follows_up, 'ADR-022');
 });
 
 test('citation check flags ids that are not in the graph', async () => {

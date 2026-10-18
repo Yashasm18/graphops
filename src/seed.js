@@ -160,6 +160,31 @@ export const TENANTS = {
       ['DOC-4', 'Redis HA setup', 'https://wiki.acme.dev/platform/redis', 'Priya Raman', ['redis-cache']],
     ],
     // people who worked on services beyond their own team (expertise)
+    // Company brain: projects, tickets and chat, linked to the changes they caused.
+    // id, name, team, goal, status, members, touches
+    projects: [
+      ['PRJ-PAYREL', 'Payments reliability Q4', 'Payments', 'Cut payment capture failures below 0.1%', 'active',
+        ['Elena Petrova', 'Aisha Bello', 'Diego Alvarez'], ['payments-service', 'payments-db', 'fraud-service', 'stripe-api']],
+      ['PRJ-CHK', 'Checkout redesign', 'Commerce', 'One-page checkout for mobile', 'active',
+        ['Sam Okafor', 'Tom Becker', 'Sofia Rossi'], ['checkout-service', 'cart-service', 'pricing-service', 'web-frontend']],
+      ['PRJ-SRCH', 'Search relevance v2', 'Discovery', 'Better ranking for long-tail queries', 'active',
+        ['Kenji Watanabe', 'Lena Fischer'], ['search-service', 'elasticsearch', 'catalog-service']],
+    ],
+    // id, title, status, project, service, assignee, days ago, implemented by deploy
+    tickets: [
+      ['PAY-412', 'Intermittent payment capture failures on Stripe timeouts', 'in progress', 'PRJ-PAYREL', 'payments-service', 'Aisha Bello', 3, 'DEP-981'],
+      ['PAY-388', 'Add exponential backoff with jitter to all DB clients (ADR-022 follow-up)', 'open', 'PRJ-PAYREL', 'payments-service', 'Diego Alvarez', 39, null],
+      ['CHK-77', 'Promo banner on homepage', 'done', 'PRJ-CHK', 'web-frontend', 'Sofia Rossi', 2, 'DEP-979'],
+      ['SRCH-15', 'Tune product page cache TTL', 'done', 'PRJ-SRCH', 'catalog-service', 'Lena Fischer', 1, 'DEP-980'],
+    ],
+    // id, channel, author, minutes ago, text, mentions (ids or service names)
+    messages: [
+      ['MSG-101', '#payments-eng', 'Aisha Bello', 60 * 26, 'Stripe capture flakes again. Bumping DB retries to 10 with 50ms backoff in v2.14 should smooth it out.', ['PAY-412', 'payments-service']],
+      ['MSG-102', '#payments-eng', 'Diego Alvarez', 60 * 25 + 20, 'Careful: INC-2041 was a retry storm. ADR-022 says jitter first, and PAY-388 is still open.', ['INC-2041', 'ADR-022', 'PAY-388', 'PAY-412']],
+      ['MSG-103', '#payments-eng', 'Aisha Bello', 60 * 25, 'Good point, will pair with you on PAY-388 next sprint. Shipping the retry bump today to unblock PAY-412.', ['PAY-388', 'PAY-412']],
+      ['MSG-104', '#incidents', 'Nina Volkova', 60 * 24 * 40, 'Postmortem INC-2041: pgbouncer pool is the safety valve. Never raise retries without jitter.', ['INC-2041', 'payments-db']],
+      ['MSG-105', '#search', 'Kenji Watanabe', 60 * 24 * 12, 'Shard rebalance done, search is green again (INC-2066).', ['INC-2066', 'elasticsearch']],
+    ],
     worked_on: [
       ['Nina Volkova', 'payments-db'], ['Nina Volkova', 'orders-db'], ['Nina Volkova', 'users-db'],
       ['Marcus Chen', 'api-gateway'], ['Marcus Chen', 'redis-cache'],
@@ -201,6 +226,9 @@ export const TENANTS = {
     ],
     decisions: [],
     docs: [],
+    projects: [['PRJ-DRM', 'DRM SDK upgrade', 'Playback', 'Move to the new license server SDK', 'active', ['Leo Martin'], ['drm-service', 'playback-api']]],
+    tickets: [['PLAY-9', 'Upgrade DRM license server SDK to 1.9', 'in progress', 'PRJ-DRM', 'drm-service', 'Leo Martin', 2, 'DEP-12']],
+    messages: [['MSG-1', '#playback', 'Leo Martin', 90, 'Rolling DRM SDK 1.9 now, PLAY-9. Should be transparent.', ['PLAY-9', 'drm-service']]],
     worked_on: [['Hana Sato', 'cdn-edge']],
   },
 };
@@ -286,6 +314,34 @@ export async function seedTenant(tenant, { reset = true, spec: specName } = {}) 
   await cypher(tenant, `
     UNWIND $w AS w MATCH (p:Person {name: w[0]}), (s:Service {name: w[1]}) MERGE (p)-[:WORKED_ON]->(s)`,
   { w: spec.worked_on });
+  // Projects, tickets and chat messages (company brain).
+  await cypher(tenant, `
+    UNWIND $projects AS p
+    MATCH (t:Team {name: p[2]})
+    CREATE (pr:Project {id: p[0], name: p[1], goal: p[3], status: p[4]})-[:OWNED_BY]->(t)
+    WITH pr, p
+    UNWIND p[5] AS member MATCH (m:Person {name: member}) CREATE (m)-[:WORKS_ON]->(pr)
+    WITH DISTINCT pr, p
+    UNWIND p[6] AS svc MATCH (s:Service {name: svc}) CREATE (pr)-[:TOUCHES]->(s)`, { projects: spec.projects || [] });
+  await cypher(tenant, `
+    UNWIND $tickets AS t
+    MATCH (pr:Project {id: t[3]}), (s:Service {name: t[4]}), (a:Person {name: t[5]})
+    CREATE (tk:Ticket {id: t[0], title: t[1], status: t[2], at: $now - t[6] * $day})
+    CREATE (tk)-[:PART_OF]->(pr), (tk)-[:ABOUT]->(s), (tk)-[:ASSIGNED_TO]->(a)
+    WITH tk, t
+    OPTIONAL MATCH (d:Deploy {id: t[7]})
+    FOREACH (_ IN CASE WHEN d IS NULL THEN [] ELSE [1] END | CREATE (d)-[:IMPLEMENTS]->(tk))`,
+  { tickets: spec.tickets || [], now, day: DAY });
+  await cypher(tenant, `
+    UNWIND $messages AS m
+    MATCH (p:Person {name: m[2]})
+    CREATE (msg:Message {id: m[0], channel: m[1], text: m[4], at: $now - m[3] * $min})-[:POSTED_BY]->(p)
+    WITH msg, m
+    UNWIND m[5] AS ref
+    MATCH (x) WHERE (x:Ticket OR x:Incident OR x:Decision OR x:Deploy OR x:Service) AND (x.id = ref OR x.name = ref)
+    CREATE (msg)-[:MENTIONS]->(x)`, { messages: spec.messages || [], now, min: MIN });
+  await cypher(tenant, `MATCH (d:Decision {id: 'ADR-022'}), (t:Ticket {id: 'PAY-388'}) CREATE (t)-[:FOLLOWS_UP]->(d)`);
+
   // Authors of deploys have worked on what they changed.
   await cypher(tenant, `MATCH (d:Deploy)-[:CHANGED]->(s), (d)-[:AUTHORED_BY]->(p) MERGE (p)-[:WORKED_ON]->(s)`);
 
@@ -299,6 +355,8 @@ export async function seedTenant(tenant, { reset = true, spec: specName } = {}) 
     "CALL db.idx.fulltext.createNodeIndex('Decision', 'title', 'rationale')",
     "CALL db.idx.fulltext.createNodeIndex('Document', 'title')",
     "CALL db.idx.fulltext.createNodeIndex('Fact', 'text')",
+    "CALL db.idx.fulltext.createNodeIndex('Ticket', 'title')",
+    "CALL db.idx.fulltext.createNodeIndex('Message', 'text')",
   ]) {
     try { await cypher(tenant, idx); } catch { /* index exists */ }
   }

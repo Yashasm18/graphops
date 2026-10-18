@@ -217,6 +217,64 @@ export const TOOLS = {
     },
   },
 
+  trace_change: {
+    description: 'Company brain: why was this change made? Follows a deploy to the ticket it implemented, the project and team behind it, the chat messages about it, related decisions, and still-open follow-up tickets on the same service. Surfaces warnings that were raised and ignored.',
+    parameters: { type: 'object', properties: { deploy: { type: 'string', description: 'Deploy id, e.g. DEP-981.' } }, required: ['deploy'] },
+    async run(t, { deploy }) {
+      const [head] = await cypher(t, `
+        MATCH (d:Deploy {id: $id})-[:CHANGED]->(s:Service), (d)-[:AUTHORED_BY]->(a:Person)
+        OPTIONAL MATCH (d)-[:IMPLEMENTS]->(tk:Ticket)
+        OPTIONAL MATCH (tk)-[:PART_OF]->(pr:Project)-[:OWNED_BY]->(team:Team)
+        RETURN d.id AS deploy, d.summary AS summary, s.name AS service, a.name AS author,
+               tk.id AS ticket, tk.title AS ticket_title, pr.name AS project, pr.goal AS project_goal, team.name AS team`,
+      { id: deploy }, { readOnly: true });
+      if (!head) return { error: `no deploy ${deploy}` };
+      const refs = [deploy, head.ticket].filter(Boolean);
+      const thread = await cypher(t, `
+        MATCH (m:Message)-[:MENTIONS]->(x) WHERE x.id IN $refs
+        WITH DISTINCT m
+        MATCH (m)-[:POSTED_BY]->(p:Person)
+        OPTIONAL MATCH (m)-[:MENTIONS]->(other)
+        RETURN m.id AS id, m.channel AS channel, p.name AS author, m.text AS text, m.at AS at,
+               collect(DISTINCT coalesce(other.id, other.name)) AS mentions
+        ORDER BY at`, { refs }, { readOnly: true });
+      const open = await cypher(t, `
+        MATCH (tk:Ticket)-[:ABOUT]->(:Service {name: $svc}) WHERE tk.status <> 'done' AND NOT tk.id IN $refs
+        OPTIONAL MATCH (tk)-[:FOLLOWS_UP]->(dec:Decision)
+        OPTIONAL MATCH (tk)-[:ASSIGNED_TO]->(p:Person)
+        RETURN tk.id AS ticket, tk.title AS title, tk.status AS status, dec.id AS follows_up, p.name AS assignee`,
+      { svc: head.service, refs }, { readOnly: true });
+      const decisions = await cypher(t, `
+        MATCH (dec:Decision)-[:ABOUT]->(:Service {name: $svc}) WHERE dec.source = 'adr'
+        RETURN dec.id AS id, dec.title AS title`, { svc: head.service }, { readOnly: true });
+      // A warning is a message in the thread that cites a past incident or decision.
+      const warnings = thread.filter((m) => m.mentions.some((x) => /^(INC|ADR)-/.test(x)))
+        .map((m) => ({ by: m.author, message: m.id, text: m.text }));
+      return {
+        ...head,
+        chat: thread.map(({ at, ...m }) => ({ ...m, hours_ago: Math.round((Date.now() - at) / 36e5) })),
+        warnings_raised: warnings,
+        open_follow_ups: open,
+        decisions_on_service: decisions,
+      };
+    },
+  },
+
+  project_context: {
+    description: 'Company brain: the projects that touch a service, with their goal, owning team, people and open tickets.',
+    parameters: { type: 'object', properties: { service: str }, required: ['service'] },
+    async run(t, { service }) {
+      return cypher(t, `
+        MATCH (pr:Project)-[:TOUCHES]->(:Service {name: $service})
+        MATCH (pr)-[:OWNED_BY]->(team:Team)
+        OPTIONAL MATCH (p:Person)-[:WORKS_ON]->(pr)
+        OPTIONAL MATCH (tk:Ticket)-[:PART_OF]->(pr) WHERE tk.status <> 'done'
+        RETURN pr.id AS id, pr.name AS project, pr.goal AS goal, team.name AS team,
+               collect(DISTINCT p.name) AS people, collect(DISTINCT tk.id + ': ' + tk.title) AS open_tickets`,
+      { service }, { readOnly: true });
+    },
+  },
+
   // ---------- Commander / company brain: people ----------
   who_to_page: {
     description: 'Rank people to page for a service. It combines the on-call engineer of the owning team, people who resolved past incidents on it, recent deploy authors, and people who have worked on it. Every person comes with reasons.',
@@ -245,13 +303,13 @@ export const TOOLS = {
   },
 
   who_knows: {
-    description: 'Find the people who know most about a system: those who worked on it, resolved incidents on it, wrote its docs or made decisions about it.',
+    description: 'Find the people who know most about a system: those who worked on it, resolved incidents on it, wrote its docs, made decisions about it, work on projects that touch it, or discuss it in chat.',
     parameters: { type: 'object', properties: { system: str }, required: ['system'] },
     async run(t, { system }) {
       return cypher(t, `
         MATCH (s:Service {name: $system})
-        MATCH (p:Person)-[r:WORKED_ON|RESOLVED_BY|WRITTEN_BY|MADE_BY]-(x)
-        WHERE x = s OR (x)-[:AFFECTED|ROOT_CAUSE|DOCUMENTS|ABOUT]->(s)
+        MATCH (p:Person)-[r:WORKED_ON|RESOLVED_BY|WRITTEN_BY|MADE_BY|WORKS_ON|POSTED_BY]-(x)
+        WHERE x = s OR (x)-[:AFFECTED|ROOT_CAUSE|DOCUMENTS|ABOUT|TOUCHES|MENTIONS]->(s)
         WITH p, collect(DISTINCT type(r)) AS evidence, count(DISTINCT x) AS weight
         MATCH (p)-[:MEMBER_OF]->(team:Team)
         RETURN p.name AS person, p.role AS role, team.name AS team, evidence, weight
@@ -274,7 +332,7 @@ export const TOOLS = {
   },
 
   run_cypher: {
-    description: 'Run a read-only Cypher query for questions no other tool answers. Labels: Service, Team, Person, Capability, Deploy, Alert, Incident, Runbook, Decision, Document, Fact, Investigation, Finding, User, Turn. Relationships: DEPENDS_ON, OWNED_BY, MEMBER_OF, ON_CALL_FOR, POWERS, CHANGED, AUTHORED_BY, FIRED_ON, FOR, AFFECTED, ROOT_CAUSE, RESOLVED_BY, MITIGATED_WITH, MADE_BY, ABOUT, MOTIVATED_BY, WRITTEN_BY, DOCUMENTS, WORKED_ON.',
+    description: 'Run a read-only Cypher query for questions no other tool answers. Labels: Service, Team, Person, Capability, Deploy, Alert, Incident, Runbook, Decision, Document, Fact, Project, Ticket, Message, Investigation, Finding, User, Turn. Relationships: DEPENDS_ON, OWNED_BY, MEMBER_OF, ON_CALL_FOR, POWERS, CHANGED, AUTHORED_BY, FIRED_ON, FOR, AFFECTED, ROOT_CAUSE, RESOLVED_BY, MITIGATED_WITH, MADE_BY, ABOUT, MOTIVATED_BY, WRITTEN_BY, DOCUMENTS, WORKED_ON, WORKS_ON, TOUCHES, PART_OF, IMPLEMENTS, ASSIGNED_TO, POSTED_BY, MENTIONS, FOLLOWS_UP, SUPERSEDES.',
     parameters: { type: 'object', properties: { query: str }, required: ['query'] },
     async run(t, { query }) {
       if (/\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|CALL\s+db\.)/i.test(query)) {
@@ -314,11 +372,11 @@ export const TOOLS = {
   },
 
   search_knowledge: {
-    description: 'Full-text search, using FalkorDB full-text indexes, across incidents, runbooks, decisions, documents and learned facts. Use it for free-text questions such as "retry storm" or "pgbouncer".',
+    description: 'Full-text search, using FalkorDB full-text indexes, across incidents, runbooks, decisions, documents, learned facts, tickets and chat messages. Use it for free-text questions such as "retry storm" or "pgbouncer".',
     parameters: { type: 'object', properties: { text: str }, required: ['text'] },
     async run(t, { text }) {
       const out = [];
-      for (const [label, fields] of [['Incident', 'title, summary'], ['Runbook', 'title, steps'], ['Decision', 'title, rationale'], ['Document', 'title'], ['Fact', 'text']]) {
+      for (const [label, fields] of [['Incident', 'title, summary'], ['Runbook', 'title, steps'], ['Decision', 'title, rationale'], ['Document', 'title'], ['Fact', 'text'], ['Ticket', 'title'], ['Message', 'text']]) {
         const rows = await cypher(t, `
           CALL db.idx.fulltext.queryNodes('${label}', $q) YIELD node, score
           RETURN '${label}' AS label, coalesce(node.id, node.text) AS id, coalesce(node.title, node.text) AS title, score
@@ -469,7 +527,7 @@ export const TOOLS = {
 export const AGENT_TOOLSETS = {
   triage: ['get_active_alerts', 'probable_root_cause', 'verify_root_cause', 'blast_radius', 'dependencies', 'dependency_path',
     'recent_changes', 'critical_nodes', 'service_clusters', 'read_investigation', 'record_finding'],
-  historian: ['similar_incidents', 'runbooks_for', 'decisions_and_docs', 'search_knowledge', 'who_knows', 'read_investigation', 'record_finding'],
+  historian: ['similar_incidents', 'runbooks_for', 'decisions_and_docs', 'recent_changes', 'trace_change', 'project_context', 'search_knowledge', 'who_knows', 'read_investigation', 'record_finding'],
   commander: ['read_investigation', 'who_to_page', 'owner_of', 'runbooks_for', 'containment_plan', 'what_if', 'record_decision'],
   chat: Object.keys(TOOLS).filter((n) => n !== 'record_decision'),
 };

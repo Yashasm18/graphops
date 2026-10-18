@@ -121,9 +121,9 @@ The cost of the gate is recall. When the topology can't separate the culprit fro
 
 | Track | What GraphOps does |
 | --- | --- |
-| **1 · Act on connected data** | Multi-hop root-cause scoring, blast radius with revenue impact, shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 24 tools, and a keyless benchmark |
+| **1 · Act on connected data** | Multi-hop root-cause scoring, blast radius with revenue impact, shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
 | **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (Runbook success counts) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, and **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`) |
-| **3 · Company brain** | People, teams, services, capabilities, deploys, docs, ADRs and incidents in one graph. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
+| **3 · Company brain** | People, teams, **projects, tickets, Slack messages**, services, capabilities, deploys, docs, ADRs and incidents in one graph. `trace_change` follows a deploy to its ticket, project and chat thread and surfaces **warnings that were raised and ignored**. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
 
 ### Explainability you can click
 
@@ -168,7 +168,7 @@ lessons and runbook edits never touch anyone else's memory) and a small AI budge
 ### Tests and benchmark
 
 ```bash
-npm test          # 11 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
+npm test          # 12 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
 npm run eval      # keyless fault-injection benchmark, writes docs/EVAL.md
 ```
 Both run in GitHub Actions against a `falkordb/falkordb` service container on every push.
@@ -200,6 +200,9 @@ Both run in GitHub Actions against a `falkordb/falkordb` service container on ev
 (:Runbook {success_count})-[:FOR]->(:Service)
 (:Decision)-[:ABOUT]->(:Service), -[:MADE_BY]->(:Person), -[:MOTIVATED_BY]->(:Incident)
 (:Document)-[:DOCUMENTS]->(:Service), (:Fact)-[:ABOUT]->(:Service), (:Person)-[:WORKED_ON]->(:Service)
+(:Project)-[:OWNED_BY]->(:Team), (:Project)-[:TOUCHES]->(:Service), (:Person)-[:WORKS_ON]->(:Project)
+(:Ticket)-[:PART_OF]->(:Project), (:Ticket)-[:ABOUT]->(:Service), (:Ticket)-[:ASSIGNED_TO]->(:Person), (:Ticket)-[:FOLLOWS_UP]->(:Decision)
+(:Deploy)-[:IMPLEMENTS]->(:Ticket), (:Message {channel})-[:POSTED_BY]->(:Person), (:Message)-[:MENTIONS]->(:Ticket|:Incident|:Decision|:Service)
 -- agent state & memory --
 (:User)-[:STARTED]->(:Investigation)-[:HAS_FINDING]->(:Finding {agent, kind, confidence})-[:EVIDENCE]->(*)
 (:Investigation)-[:CONCLUDED]->(:Decision {source:'agent'})-[:BASED_ON]->(:Finding)
@@ -322,11 +325,26 @@ CALL db.idx.fulltext.createNodeIndex('Incident', 'title', 'summary');
 CALL db.idx.fulltext.queryNodes('Incident', $q) YIELD node, score RETURN node.id, node.title, score
 ```
 
+**13. Why was this change made?** (`trace_change`). Deploy → ticket → project → chat, plus open follow-ups that were skipped.
+```cypher
+MATCH (d:Deploy {id: $id})-[:CHANGED]->(s:Service), (d)-[:AUTHORED_BY]->(a:Person)
+OPTIONAL MATCH (d)-[:IMPLEMENTS]->(tk:Ticket)-[:PART_OF]->(pr:Project)-[:OWNED_BY]->(team:Team)
+RETURN d.id, s.name, a.name, tk.id, pr.name, team.name;
+
+MATCH (m:Message)-[:MENTIONS]->(x) WHERE x.id IN [$deploy, $ticket]
+MATCH (m)-[:POSTED_BY]->(p) OPTIONAL MATCH (m)-[:MENTIONS]->(other)
+RETURN m.text, p.name, collect(coalesce(other.id, other.name)) AS mentions ORDER BY m.at;
+// a message that cites an INC-/ADR- id in that thread is a warning that was raised
+
+MATCH (tk:Ticket)-[:ABOUT]->(:Service {name: $svc}) WHERE tk.status <> 'done'
+OPTIONAL MATCH (tk)-[:FOLLOWS_UP]->(dec:Decision) RETURN tk.id, tk.title, dec.id
+```
+
 ## Code map
 
 | File | Purpose |
 | --- | --- |
-| `src/tools.js` | 24 graph tools (Cypher + FalkorDB algorithms) shared by the agents, the HTTP API and MCP |
+| `src/tools.js` | 26 graph tools (Cypher + FalkorDB algorithms) shared by the agents, the HTTP API and MCP |
 | `src/proof.js` | Proof gate (SPpaths, maxFlow), GRAPH.COPY sandboxes, what-if, containment search, citation checks |
 | `src/eval.js` | Keyless fault-injection benchmark (`npm run eval`) |
 | `test/` | Integration tests against a real FalkorDB (`npm test`), run in GitHub Actions |

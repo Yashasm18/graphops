@@ -26,7 +26,8 @@ Use probable_root_cause first, then recent_changes and blast_radius on the root 
 Record findings of kind root_cause, suspect_change and blast_radius.`,
   historian: `You are the HISTORIAN agent, responsible for the team's memory. For the services involved, find precedent incidents,
 the runbooks that worked before, architecture decisions and facts learned in earlier sessions, and the people who know the system.
-Record findings of kind precedent, runbook and knowledge.`,
+Also find recent deploys near the alerting services and call trace_change on the most suspicious one, to learn why it was
+made (ticket, project, chat) and whether anyone warned against it. Record findings of kind precedent, runbook and knowledge.`,
   commander: `You are the INCIDENT COMMANDER agent. Read the shared investigation first: it holds the findings from Triage and Historian.
 Rules:
 - root_cause is the service named in Triage's root_cause finding, i.e. the failing component, not the service whose deploy triggered it.
@@ -197,7 +198,25 @@ const SCRIPTED = {
         evidence: [adr?.id, focus, ...know.docs.map((d) => d.title)].filter(Boolean),
       });
     }
-    return best ? `This looks like **${best.incident}** (${best.title}). The best runbook is ${rbs[0]?.runbook || 'none'}.` : 'There are no close precedents in memory.';
+    // Why was the nearby change made? Follow it to ticket, project and chat.
+    const changes = await callTool(ctx, 'recent_changes', { service: focus });
+    let why = '';
+    if (changes[0]) {
+      const tr = await callTool(ctx, 'trace_change', { deploy: changes[0].deploy });
+      if (!tr.error) {
+        const warn = tr.warnings_raised[0];
+        const open = tr.open_follow_ups[0];
+        await callTool(ctx, 'record_finding', {
+          kind: 'knowledge', confidence: 0.85,
+          summary: `${tr.deploy} implemented ${tr.ticket || 'no ticket'}${tr.project ? ` for project "${tr.project}" (${tr.team})` : ''}.`
+            + (warn ? ` ${warn.by} warned in ${warn.message}: "${warn.text}"` : '')
+            + (open ? ` Follow-up ${open.ticket} "${open.title}" is still ${open.status}.` : ''),
+          evidence: [tr.deploy, tr.ticket, warn?.message, open?.ticket, open?.follows_up].filter(Boolean),
+        });
+        why = warn ? ` ${warn.by} had warned about this in ${warn.message}.` : '';
+      }
+    }
+    return best ? `This looks like **${best.incident}** (${best.title}). The best runbook is ${rbs[0]?.runbook || 'none'}.${why}` : `There are no close precedents in memory.${why}`;
   },
   async commander(ctx) {
     const inv = await callTool(ctx, 'read_investigation', {});

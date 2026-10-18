@@ -209,7 +209,7 @@ export async function containmentPlan(tenant, { root_cause }) {
 }
 
 // Every id or service an answer cites must exist in the graph.
-const ID_RE = /\b(?:INC|DEP|RB|ADR|ALR|DEC|DOC)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b/g;
+const ID_RE = /\b(?:INC|DEP|RB|ADR|ALR|DEC|DOC|PAY|CHK|SRCH|PLAY|MSG|PRJ)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b/g;
 export async function checkCitations(tenant, text) {
   const ids = [...new Set(String(text || '').match(ID_RE) || [])];
   const ticks = [...new Set([...String(text || '').matchAll(/`([a-z][a-z0-9-]{2,})`/g)].map((m) => m[1]))];

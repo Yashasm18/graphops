@@ -6,6 +6,7 @@ const COLORS = {
   Service: '#4fa3ff', Capability: '#3ddc97', Team: '#8892b0', Person: '#e6c07b', Deploy: '#ff8a3d', Alert: '#ff5c6c',
   Incident: '#c678dd', Runbook: '#56b6c2', Decision: '#ffc24b', Document: '#98a7c4', Fact: '#7ee0b5',
   Investigation: '#ff8a3d', Finding: '#b67cff',
+  Project: '#f78fb3', Ticket: '#e5c07b', Message: '#7f8ea3',
 };
 const AGENT_COLORS = { triage: '#4fa3ff', historian: '#b67cff', commander: '#ff8a3d', chat: '#3ddc97' };
 const LAYERS = {
@@ -14,10 +15,11 @@ const LAYERS = {
   'Changes & alerts': ['Deploy', 'Alert'],
   'Incident memory': ['Incident', 'Runbook'],
   'Knowledge': ['Document', 'Fact', 'Decision:adr'],
+  'Projects & chat': ['Project', 'Ticket', 'Message'],
   'Agent state': ['Investigation', 'Finding', 'Decision:agent'],
 };
 const state = {
-  tenant: 'acme', layers: new Set(['Services', 'People', 'Changes & alerts', 'Incident memory', 'Agent state']),
+  tenant: 'acme', layers: new Set(['Services', 'People', 'Changes & alerts', 'Incident memory', 'Projects & chat', 'Agent state']),
   graph: { nodes: [], edges: [] }, byName: new Map(), network: null, nodesDS: null, edgesDS: null,
   investigationId: null, running: false, cypherCount: 0,
 };
