@@ -104,3 +104,10 @@ h4 { margin: 4px 0 8px; font-size: 12px; color: var(--muted); text-transform: up
 .wi-card .big { font-size: 20px; font-weight: 700; } .wi-card ul { margin: 6px 0; padding-left: 18px; }
 .good { color: var(--good); } .bad { color: var(--bad); }
 #wi-service { width: 100%; }
+
+.actions-card { border: 1px solid #1f5c45; background: #0f1d18; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.act { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--panel); }
+.chan { font: 10px var(--mono); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); }
+.chan.live { color: var(--good); border-color: #1f5c45; } .chan.dry { color: var(--warn); border-color: #5c4a1f; }
+.status.sent { color: var(--good); } .status.dry_run { color: var(--warn); } .status.failed { color: var(--bad); }
+.act a { color: var(--accent2); word-break: break-all; }

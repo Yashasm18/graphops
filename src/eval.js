@@ -7,11 +7,12 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { cypher } from './db.js';
 import { withSandbox, verifyRootCause } from './proof.js';
 import { TOOLS } from './tools.js';
-import { seedTenant } from './seed.js';
+import { seedTenant, OTEL } from './seed.js';
 import { listTenants } from './db.js';
 
 const N = Number(process.argv[2] || 100);
-const TENANT = process.env.GRAPHOPS_EVAL_TENANT || 'acme';
+const TENANT = process.argv[3] || process.env.GRAPHOPS_EVAL_TENANT || 'acme';
+const FLAGS = process.argv.includes('--flags');
 const MIN = 60 * 1000;
 
 // Deterministic RNG so the run is reproducible.
@@ -20,7 +21,7 @@ const rand = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 429496
 const pick = (xs) => xs[Math.floor(rand() * xs.length)];
 const chance = (p) => rand() < p;
 
-async function world(sim, services, people) {
+async function world(sim, services, people, opts = {}) {
   const now = Date.now();
   await cypher(sim, `MATCH (a:Alert) DETACH DELETE a`);
   await cypher(sim, `MATCH (d:Deploy) DETACH DELETE d`);
@@ -28,19 +29,20 @@ async function world(sim, services, people) {
 
   // Root: any service that something depends on.
   const roots = services.filter((s) => s.dependents > 0);
-  const root = pick(roots).name;
+  const root = opts.root || pick(roots).name;
   const upstream = (await cypher(sim, `
     MATCH (u:Service)-[:DEPENDS_ON*1..4]->(:Service {name: $root}) RETURN collect(DISTINCT u.name) AS u`, { root }))[0].u;
   const direct = (await cypher(sim, `
     MATCH (u:Service)-[:DEPENDS_ON]->(:Service {name: $root}) RETURN collect(u.name) AS u`, { root }))[0].u;
 
-  const silentRoot = chance(0.25);
+  const silentRoot = opts.silent ?? chance(0.25);
   const alerting = new Set(silentRoot ? [] : [root]);
   for (const u of upstream) if (chance(0.6)) alerting.add(u);
-  while (alerting.size < 2 && upstream.length) alerting.add(pick(upstream));
+  // Make sure at least two services alert (bounded: small chains may not have two callers).
+  for (const u of upstream) { if (alerting.size >= 2) break; alerting.add(u); }
   if (alerting.size < 2) alerting.add(root);
   const others = services.map((s) => s.name).filter((n) => n !== root && !upstream.includes(n));
-  const noise = chance(0.4) && others.length ? pick(others) : null;
+  const noise = (opts.noise ?? chance(0.4)) && others.length ? pick(others) : null;
   if (noise) alerting.add(noise);
 
   const alerts = [...alerting].map((s, i) => ({ id: `EV-ALR-${i}`, service: s, at: now - Math.floor(1 + rand() * 20) * MIN }));
@@ -67,7 +69,46 @@ async function world(sim, services, people) {
   return { root, culprit, alerting: [...alerting], noise, silentRoot, deploys };
 }
 
+
+// Real faults: every OpenTelemetry Demo flagd flag that targets a service, in
+// three variants (root alerting, silent root, root plus a noise alert), then
+// the same fault again after the first one was resolved into memory.
+async function flagBench() {
+  const flags = OTEL.flags.filter((f) => f.target);
+  return withSandbox('otel', async (sim) => {
+    const services = await cypher(sim, `
+      MATCH (s:Service) OPTIONAL MATCH (u:Service)-[:DEPENDS_ON]->(s) RETURN s.name AS name, count(u) AS dependents`);
+    const people = (await cypher(sim, `MATCH (p:Person) RETURN collect(p.name) AS p`))[0].p;
+    const rows = [];
+    for (const f of flags) {
+      const callers = services.find((s) => s.name === f.target)?.dependents || 0;
+      const variants = [{ silent: false, noise: false }, { silent: true, noise: false }, { silent: false, noise: true }]
+        .filter((v) => !v.silent || callers > 0);
+      for (const v of variants) {
+        const w = await world(sim, services, people, { root: f.target, ...v });
+        const ranked = await TOOLS.probable_root_cause.run(sim, {});
+        const proof = await verifyRootCause(sim, { root_cause: f.target });
+        rows.push({ flag: f.flag, target: f.target, variant: v.silent ? 'silent root' : v.noise ? 'with noise' : 'root alerting',
+          top1: ranked[0]?.candidate === f.target, top3: ranked.slice(0, 3).some((r) => r.candidate === f.target),
+          verified: proof.verdict === 'VERIFIED', alerts: w.alerting.length });
+      }
+      // Memory: resolve the fault into an Incident, inject it again, recall it.
+      const id = `INC-EV-${f.flag}`;
+      await cypher(sim, `
+        MATCH (s:Service {name: $t})
+        CREATE (i:Incident {id: $id, title: $flag, severity: 'SEV2', status: 'resolved', at: $at, summary: $d, source: 'graphops'})
+        CREATE (i)-[:ROOT_CAUSE]->(s), (i)-[:AFFECTED]->(s)`, { t: f.target, id, flag: f.flag, d: f.description, at: Date.now() });
+      const w2 = await world(sim, services, people, { root: f.target, silent: false, noise: false });
+      const recalled = await TOOLS.similar_incidents.run(sim, { services: w2.alerting });
+      rows.push({ flag: f.flag, target: f.target, variant: 'same fault again', recall: recalled[0]?.incident === id });
+      await cypher(sim, `MATCH (i:Incident {id: $id}) DETACH DELETE i`, { id });
+    }
+    return { flags, rows };
+  });
+}
+
 async function main() {
+  if (FLAGS) return mainFlags();
   if (!(await listTenants()).includes(TENANT)) await seedTenant(TENANT);
   const started = Date.now();
   const res = await withSandbox(TENANT, async (sim) => {
@@ -169,6 +210,50 @@ which is why the ranking also weighs alerts on the node itself, depth and nearby
   mkdirSync('docs', { recursive: true });
   writeFileSync('docs/EVAL.md', md);
   console.log(`\n${md}`);
+  process.exit(0);
+}
+
+
+async function mainFlags() {
+  if (!OTEL) throw new Error('run npm run import:otel first');
+  await seedTenant('otel');
+  const started = Date.now();
+  const { flags, rows } = await flagBench();
+  const scored = rows.filter((r) => r.variant !== 'same fault again');
+  const again = rows.filter((r) => r.variant === 'same fault again');
+  const pct = (a, b) => `${Math.round((a / b) * 1000) / 10}%`;
+  const by = (v) => scored.filter((r) => r.variant === v);
+  const line = (label, xs) => `| ${label} | ${xs.length} | **${pct(xs.filter((r) => r.top1).length, xs.length)}** | ${pct(xs.filter((r) => r.top3).length, xs.length)} | ${pct(xs.filter((r) => r.verified).length, xs.length)} |`;
+  const md = `# GraphOps on the real OpenTelemetry Demo
+
+Generated by \`npm run eval:otel\` on ${new Date().toISOString().slice(0, 10)}, with no LLM involved.
+The service topology (${OTEL.services.length} services, ${OTEL.deps.length} dependencies) and the ${flags.length} fault flags were imported from
+[open-telemetry/opentelemetry-demo](${OTEL.source.repo}) (\`${OTEL.source.files.join('`, `')}\`) by \`npm run import:otel\`.
+Each flag that breaks a service is replayed on a \`GRAPH.COPY\` sandbox in three variants: the broken service alerts, the broken service is
+silent (only its callers alert), and an unrelated noise alert is added. Every world also gets two decoy deploys.
+
+| Variant | Worlds | Root cause top-1 | Top-3 | Proof gate VERIFIED |
+| --- | --- | --- | --- | --- |
+${line('All', scored)}
+${line('Root alerting', by('root alerting'))}
+${line('Silent root', by('silent root'))}
+${line('With noise alert', by('with noise'))}
+
+**Memory:** after each fault was resolved into an \`Incident\`, the same fault was injected again. The Historian's \`similar_incidents\`
+recalled the learned incident first in **${again.filter((r) => r.recall).length}/${again.length}** faults.
+
+| Flag | Breaks | Root alerting | Silent root | With noise | Same fault again |
+| --- | --- | --- | --- | --- | --- |
+${flags.map((f) => {
+    const cell = (v) => { const r = rows.find((x) => x.flag === f.flag && x.variant === v); return !r ? 'n/a' : (r.top1 ? '✅ top-1' : r.top3 ? '🟡 top-3' : '❌'); };
+    const a = rows.find((x) => x.flag === f.flag && x.variant === 'same fault again');
+    return `| \`${f.flag}\` | ${f.target} | ${cell('root alerting')} | ${cell('silent root')} | ${cell('with noise')} | ${a?.recall ? '✅ recalled' : '❌'} |`;
+  }).join('\n')}
+
+Run time: ${((Date.now() - started) / 1000).toFixed(1)}s.
+`;
+  writeFileSync('docs/EVAL-OTEL.md', md);
+  console.log(md);
   process.exit(0);
 }
 

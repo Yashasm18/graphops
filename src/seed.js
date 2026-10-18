@@ -1,6 +1,9 @@
 // Seeds a tenant graph with a realistic platform: services and their
 // dependencies, business capabilities, teams, people, deploys, alerts,
 // past incidents, runbooks, docs and architecture decisions.
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { cypher, graphFor } from './db.js';
 
 const MIN = 60 * 1000;
@@ -232,6 +235,67 @@ export const TENANTS = {
     worked_on: [['Hana Sato', 'cdn-edge']],
   },
 };
+
+
+// ---------- otel: the public OpenTelemetry Demo (Astronomy Shop) ----------
+// Topology and fault flags are imported from the real repo (npm run import:otel
+// -> data/otel-demo.json). Teams, people, revenue and runbooks are synthetic.
+const OTEL_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'otel-demo.json');
+const OTEL_TEAMS = {
+  Storefront: ['frontend', 'frontend-proxy', 'image-provider', 'ad', 'recommendation'],
+  Checkout: ['checkout', 'cart', 'valkey-cart', 'currency', 'payment'],
+  Fulfilment: ['shipping', 'quote', 'email'],
+  Catalog: ['product-catalog', 'astronomy-db'],
+  Data: ['kafka', 'accounting', 'fraud-detection'],
+  Platform: ['flagd'],
+};
+export const OTEL = existsSync(OTEL_FILE) ? JSON.parse(readFileSync(OTEL_FILE, 'utf8')) : null;
+
+function otelSpec(o) {
+  const teamOf = (svc) => Object.entries(OTEL_TEAMS).find(([, xs]) => xs.includes(svc))?.[0] || 'Platform';
+  const tier = (svc) => (['frontend', 'frontend-proxy', 'checkout', 'payment', 'cart', 'product-catalog'].includes(svc) ? 1 : 2);
+  const has = (n) => o.services.some((s) => s.name === n);
+  return {
+    label: 'Astronomy Shop (real OpenTelemetry Demo topology)',
+    source: o.source,
+    teams: Object.keys(OTEL_TEAMS).map((t) => [t, `${t} services of the OpenTelemetry Demo`]),
+    people: [
+      ['Ana Souza', 'SRE', 'Storefront', true, '@ana'], ['Ben Carter', 'Engineer', 'Storefront', false, '@ben'],
+      ['Chloe Martin', 'Senior Engineer', 'Checkout', true, '@chloe'], ['Dev Patel', 'Engineer', 'Checkout', false, '@dev'],
+      ['Eva Novak', 'Engineer', 'Fulfilment', true, '@eva'], ['Femi Ade', 'Senior Engineer', 'Catalog', true, '@femi'],
+      ['Gus Larsen', 'Data Engineer', 'Data', true, '@gus'], ['Hiro Tanaka', 'Platform Engineer', 'Platform', true, '@hiro'],
+    ],
+    services: o.services.map((s) => [s.name, s.kind, teamOf(s.name), tier(s.name)]),
+    deps: o.deps.map(([a, b]) => (a === 'frontend' && ['ad', 'recommendation'].includes(b)
+      ? [a, b, true, b === 'ad' ? 'Hide ad slots' : 'Show static recommendations'] : [a, b])),
+    capabilities: [
+      ['Checkout', 3500, ['checkout', 'payment'].filter(has)],
+      ['Browse & search', 1200, ['product-catalog', 'frontend'].filter(has)],
+      ['Shipping quotes', 400, ['shipping', 'quote'].filter(has)],
+      ['Recommendations', 300, ['recommendation'].filter(has)],
+      ['Ads', 250, ['ad'].filter(has)],
+      ['Order analytics', 50, ['accounting', 'fraud-detection'].filter(has)],
+    ].filter((c) => c[2].length),
+    // A live scenario taken from a real flag: paymentUnreachable.
+    deploys: [
+      ['DEP-O17', 'payment', 'Dev Patel', 14, 'v2.3.0', 'Switch payment gRPC client to new connection pool', 'medium'],
+      ['DEP-O16', 'recommendation', 'Ben Carter', 70, 'v1.8.2', 'Recommendation cache warm-up job', 'low'],
+    ],
+    alerts: [
+      ['ALR-O1', 'payment', 'paymentUnreachable: gRPC UNAVAILABLE', 'critical', 9],
+      ['ALR-O2', 'checkout', 'PlaceOrder error rate 41%', 'critical', 8],
+      ['ALR-O3', 'frontend', 'POST /api/checkout 5xx', 'critical', 7],
+      ['ALR-O4', 'frontend-proxy', 'Upstream 503s', 'warning', 6],
+    ],
+    runbooks: o.flags.filter((f) => f.target && has(f.target)).slice(0, 10)
+      .map((f, i) => [`RB-O${i + 1}`, `${f.flag}: ${f.description}`, f.target, `1. Check the ${f.flag} flag in flagd. 2. Turn it off. 3. Watch ${f.target} recover.`, 1]),
+    incidents: [],
+    decisions: [],
+    docs: [],
+    worked_on: [],
+  };
+}
+if (OTEL) TENANTS.otel = otelSpec(OTEL);
 
 // `spec` lets a test graph (e.g. "ci_acme") be seeded from a named tenant spec.
 export async function seedTenant(tenant, { reset = true, spec: specName } = {}) {

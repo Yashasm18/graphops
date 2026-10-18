@@ -6,7 +6,7 @@ const COLORS = {
   Service: '#4fa3ff', Capability: '#3ddc97', Team: '#8892b0', Person: '#e6c07b', Deploy: '#ff8a3d', Alert: '#ff5c6c',
   Incident: '#c678dd', Runbook: '#56b6c2', Decision: '#ffc24b', Document: '#98a7c4', Fact: '#7ee0b5',
   Investigation: '#ff8a3d', Finding: '#b67cff',
-  Project: '#f78fb3', Ticket: '#e5c07b', Message: '#7f8ea3',
+  Project: '#f78fb3', Ticket: '#e5c07b', Message: '#7f8ea3', Action: '#3ddc97',
 };
 const AGENT_COLORS = { triage: '#4fa3ff', historian: '#b67cff', commander: '#ff8a3d', chat: '#3ddc97' };
 const LAYERS = {
@@ -16,7 +16,7 @@ const LAYERS = {
   'Incident memory': ['Incident', 'Runbook'],
   'Knowledge': ['Document', 'Fact', 'Decision:adr'],
   'Projects & chat': ['Project', 'Ticket', 'Message'],
-  'Agent state': ['Investigation', 'Finding', 'Decision:agent'],
+  'Agent state': ['Investigation', 'Finding', 'Decision:agent', 'Action'],
 };
 const state = {
   tenant: 'acme', layers: new Set(['Services', 'People', 'Changes & alerts', 'Incident memory', 'Projects & chat', 'Agent state']),
@@ -249,6 +249,9 @@ function onEvent(e) {
     case 'citations':
       add(`${e.unknown.length ? '⚠' : '✓'} ${e.verified}/${e.checked} cited nodes exist in the graph${e.unknown.length ? ` · unknown: ${esc(e.unknown.join(', '))}` : ''}`, `cites ${e.unknown.length ? 'bad' : ''}`);
       break;
+    case 'actions':
+      renderActions(e.actions);
+      break;
     case 'notice':
       add(`⚠ ${chip(e.agent || 'orchestrator')} ${esc(e.text)}`, 'notice');
       break;
@@ -270,6 +273,22 @@ function proofHtml(p) {
     ${(p.explained || []).map((x) => `<div class="path">${esc(x.path.join(' → '))}</div>`).join('')}
     ${p.unexplained?.length ? `<div class="path bad">no causal path: ${esc(p.unexplained.join(', '))}</div>` : ''}
     ${p.deploy ? `<div class="path">${esc(p.deploy.id)} on ${esc(p.deploy.service || '?')}: ${p.deploy.adjacent ? 'adjacent' : 'NOT adjacent'}, ${p.deploy.recent ? 'recent' : 'NOT recent'}</div>` : ''}`;
+}
+
+function renderActions(actions) {
+  const el = document.createElement('div');
+  el.className = 'actions-card';
+  el.innerHTML = `<div class="head"><b>⚡ Proposed actions</b><span class="ms">nothing is sent until you approve</span></div>
+    ${actions.map((a) => `<div class="act" data-act="${esc(a.id)}">
+      <div class="head"><span>${a.kind === 'page' ? '📟' : '🐙'} ${esc(a.summary)}</span>
+        <span class="chan ${a.channel === 'dry-run' ? 'dry' : 'live'}">${esc(a.channel)}</span></div>
+      <details><summary>exact payload</summary><pre>${esc(a.kind === 'page' ? a.payload.text : `${a.payload.title}\n\n${a.payload.body}`)}</pre></details>
+      <div class="row">${a.status === 'proposed'
+        ? `<button class="primary" data-approve="${esc(a.id)}">Approve & ${a.channel === 'dry-run' ? 'dry-run' : 'send'}</button>`
+        : `<span class="status ${esc(a.status)}">${esc(a.status)}</span> ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.url)}</a>` : esc(a.result || '')}`}</div>
+    </div>`).join('')}`;
+  tl().appendChild(el);
+  tl().scrollTop = tl().scrollHeight;
 }
 
 function renderDecision(d) {
@@ -308,6 +327,14 @@ document.addEventListener('click', async (e) => {
     e.target.disabled = true; e.target.textContent = 'Recorded as failed';
     add(`🧠 Recorded the failure.${r.runbook_penalised ? ` ${esc(r.runbook_penalised)} lost rank in procedural memory.` : ''} Investigate again and the agents will prefer the next-best option.`, 'finding historian');
     await loadGraph(); await loadMemory();
+  }
+  if (e.target.matches('[data-approve]')) {
+    const id = e.target.dataset.approve;
+    e.target.disabled = true; e.target.textContent = 'Sending…';
+    const r = await api(`/api/actions/${id}/approve`, { method: 'POST', body: { user: $('#user').value } });
+    const row = e.target.closest('.row');
+    row.innerHTML = `<span class="status ${esc(r.status)}">${esc(r.status)}</span> ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>` : esc(r.result || '')}`;
+    await loadGraph();
   }
   const m = e.target.closest('[data-inv]');
   if (m) openInvestigation(m.dataset.inv);
@@ -366,6 +393,7 @@ async function openInvestigation(id) {
   for (const t of inv.turns.slice(1)) add(`<div class="head">${chip(t.agent || t.role)}</div><div>${md(t.text)}</div>`, `${t.agent || ''} say`);
   if (inv.decision?.verdict) add(`<div class="head"><span><span class="verdict ${esc(inv.decision.verdict)}">${esc(inv.decision.verdict)}</span> <b>Proof gate</b></span></div><div>${esc(inv.decision.proof || '')}</div>`, `proof ${esc(inv.decision.verdict)}`);
   if (inv.decision) renderDecision({ ...inv.decision, page: inv.decision.paged });
+  if (inv.decision) api(`/api/investigations/${id}/actions`).then((acts) => acts.length && renderActions(acts)).catch(() => {});
   if (inv.status === 'resolved') tl().querySelector('.decision:last-of-type .actions')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
   $('#chatform').classList.remove('hidden');
   await showTrace(id); switchTab('trace');
@@ -461,7 +489,8 @@ async function init(first = true) {
   const current = s.tenants.find((t) => t.id === state.tenant);
   if (!current.seeded) await api('/api/seed', { method: 'POST', body: {} });
   if (state.tenant === 'globex') $('#question').value = 'Users report videos won\'t start playing.';
-  else $('#question').value = 'Checkout is throwing 500s and customers can\'t pay. What\'s going on?';
+  else if (state.tenant === 'otel') $('#question').value = 'Astronomy Shop checkout is failing. Orders return errors.';
+  if (!['globex', 'otel'].includes(state.tenant)) $('#question').value = 'Checkout is throwing 500s and customers can\'t pay. What\'s going on?';
   renderLayers();
   await loadGraph();
   await loadMemory();

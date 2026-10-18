@@ -6,6 +6,7 @@ import { traceStore, cypher } from './db.js';
 import { TOOLS, AGENT_TOOLSETS, runTool } from './tools.js';
 import { startInvestigation, addTurn, getTurns, userHistory } from './memory.js';
 import { checkCitations } from './proof.js';
+import { proposeActions } from './actions.js';
 
 const MODELS = (process.env.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3-flash-preview').split(',').map((m) => m.trim());
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
@@ -290,6 +291,9 @@ export async function investigate({ tenant, user, question, emit, scripted = fal
   const anchor = ranked ? ` The graph ranks ${ranked.candidate} as the most likely failing component (score ${ranked.score}). Use it as root_cause unless the findings clearly contradict it.` : '';
   const brief = await runAgent({ ...base, agent: 'commander' }, `Incident report: "${question}".${anchor} Read the investigation, decide, and brief the humans.`);
 
+  // Propose real-world actions; a human must approve each one before it is sent.
+  const actions = await proposeActions(tenant, investigationId).catch(() => []);
+  if (actions.length) emit({ type: 'actions', id: investigationId, actions });
   stats.ms = Date.now() - stats.started;
   emit({ type: 'done', id: investigationId, brief, stats });
   return { investigationId, brief, stats };

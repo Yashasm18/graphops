@@ -7,6 +7,7 @@ import { seedTenant, resetScenario, TENANTS } from './seed.js';
 import { investigate, chat, llmEnabled } from './agents.js';
 import { listInvestigations, getInvestigation, resolveInvestigation, decisionTrace } from './memory.js';
 import { runTool, TOOLS } from './tools.js';
+import { proposeActions, listActions, approveAction, channels } from './actions.js';
 
 const app = express();
 app.use(express.json());
@@ -82,6 +83,7 @@ app.get('/api/status', wrap(async (req) => {
   return {
     llm: llmEnabled(),
     public: PUBLIC,
+    action_channels: channels(),
     llm_runs_left: PUBLIC ? Math.max(0, LLM_RUNS_PER_VISITOR - (llmRuns.get(visitorOf(req)) || 0)) : null,
     models: process.env.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3-flash-preview',
     tenants: Object.entries(TENANTS).map(([id, s]) => ({ id, label: s.label, seeded: PUBLIC || seeded.includes(id) })),
@@ -110,6 +112,10 @@ app.get('/api/investigations/:id', wrap(async (req) => {
 }));
 app.post('/api/investigations/:id/resolve', wrap(async (req) =>
   resolveInvestigation(await tenantOf(req), req.params.id, { resolution: req.body.resolution || 'Mitigated per decision.', resolver: req.body.resolver, outcome: req.body.outcome })));
+
+app.get('/api/investigations/:id/actions', wrap(async (req) => listActions(await tenantOf(req), req.params.id)));
+app.post('/api/investigations/:id/actions', wrap(async (req) => proposeActions(await tenantOf(req), req.params.id)));
+app.post('/api/actions/:id/approve', wrap(async (req) => approveAction(await tenantOf(req), req.params.id, req.body.user)));
 
 app.post('/api/investigate', stream(async (req, emit) => {
   const tenant = await tenantOf(req);

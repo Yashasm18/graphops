@@ -30,3 +30,9 @@ services:
         sync: false
       - key: FALKORDB_PASSWORD
         sync: false
+      - key: ACTION_WEBHOOK_URL
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false

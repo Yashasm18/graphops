@@ -1,0 +1,333 @@
+{
+  "source": {
+    "repo": "https://github.com/open-telemetry/opentelemetry-demo",
+    "files": [
+      "compose.yaml",
+      "compose.full.yaml",
+      "src/flagd/demo.flagd.json"
+    ],
+    "fetched_at": "2026-10-18T09:54:53.749Z"
+  },
+  "services": [
+    {
+      "name": "ad",
+      "kind": "service"
+    },
+    {
+      "name": "cart",
+      "kind": "service"
+    },
+    {
+      "name": "checkout",
+      "kind": "service"
+    },
+    {
+      "name": "currency",
+      "kind": "service"
+    },
+    {
+      "name": "email",
+      "kind": "service"
+    },
+    {
+      "name": "frontend",
+      "kind": "service"
+    },
+    {
+      "name": "frontend-proxy",
+      "kind": "service"
+    },
+    {
+      "name": "image-provider",
+      "kind": "service"
+    },
+    {
+      "name": "payment",
+      "kind": "service"
+    },
+    {
+      "name": "product-catalog",
+      "kind": "service"
+    },
+    {
+      "name": "quote",
+      "kind": "service"
+    },
+    {
+      "name": "recommendation",
+      "kind": "service"
+    },
+    {
+      "name": "shipping",
+      "kind": "service"
+    },
+    {
+      "name": "flagd",
+      "kind": "service"
+    },
+    {
+      "name": "astronomy-db",
+      "kind": "database"
+    },
+    {
+      "name": "valkey-cart",
+      "kind": "cache"
+    },
+    {
+      "name": "accounting",
+      "kind": "service"
+    },
+    {
+      "name": "fraud-detection",
+      "kind": "service"
+    },
+    {
+      "name": "kafka",
+      "kind": "queue"
+    }
+  ],
+  "deps": [
+    [
+      "ad",
+      "flagd"
+    ],
+    [
+      "cart",
+      "flagd"
+    ],
+    [
+      "cart",
+      "valkey-cart"
+    ],
+    [
+      "checkout",
+      "flagd"
+    ],
+    [
+      "checkout",
+      "cart"
+    ],
+    [
+      "checkout",
+      "currency"
+    ],
+    [
+      "checkout",
+      "email"
+    ],
+    [
+      "checkout",
+      "payment"
+    ],
+    [
+      "checkout",
+      "product-catalog"
+    ],
+    [
+      "checkout",
+      "shipping"
+    ],
+    [
+      "checkout",
+      "kafka"
+    ],
+    [
+      "email",
+      "flagd"
+    ],
+    [
+      "frontend",
+      "ad"
+    ],
+    [
+      "frontend",
+      "cart"
+    ],
+    [
+      "frontend",
+      "checkout"
+    ],
+    [
+      "frontend",
+      "currency"
+    ],
+    [
+      "frontend",
+      "product-catalog"
+    ],
+    [
+      "frontend",
+      "recommendation"
+    ],
+    [
+      "frontend",
+      "shipping"
+    ],
+    [
+      "frontend",
+      "flagd"
+    ],
+    [
+      "frontend",
+      "quote"
+    ],
+    [
+      "frontend",
+      "image-provider"
+    ],
+    [
+      "frontend-proxy",
+      "frontend"
+    ],
+    [
+      "frontend-proxy",
+      "image-provider"
+    ],
+    [
+      "frontend-proxy",
+      "flagd"
+    ],
+    [
+      "payment",
+      "flagd"
+    ],
+    [
+      "product-catalog",
+      "flagd"
+    ],
+    [
+      "product-catalog",
+      "astronomy-db"
+    ],
+    [
+      "recommendation",
+      "product-catalog"
+    ],
+    [
+      "recommendation",
+      "flagd"
+    ],
+    [
+      "shipping",
+      "quote"
+    ],
+    [
+      "shipping",
+      "flagd"
+    ],
+    [
+      "accounting",
+      "kafka"
+    ],
+    [
+      "fraud-detection",
+      "flagd"
+    ],
+    [
+      "fraud-detection",
+      "kafka"
+    ]
+  ],
+  "flags": [
+    {
+      "flag": "adFailure",
+      "description": "Fail ad service",
+      "target": "ad"
+    },
+    {
+      "flag": "adHighCpu",
+      "description": "Triggers high cpu load in the ad service",
+      "target": "ad"
+    },
+    {
+      "flag": "adManualGc",
+      "description": "Triggers full manual garbage collections in the ad service",
+      "target": "ad"
+    },
+    {
+      "flag": "aiRunawayAgent",
+      "description": "forces the agent to keep looping tool calls until it hits its recursion limit",
+      "target": null
+    },
+    {
+      "flag": "aiSlowResponse",
+      "description": "slow LLM responses in the agent service",
+      "target": null
+    },
+    {
+      "flag": "cartFailure",
+      "description": "Fail cart service n% of the time",
+      "target": "cart"
+    },
+    {
+      "flag": "cartMetricCardinalityOverflow",
+      "description": "Adds the current trace ID to demo.cart.get_cart.latency to trigger SDK metric cardinality overflow. View it in the Self-Observability dashboard.",
+      "target": null
+    },
+    {
+      "flag": "emailMemoryLeak",
+      "description": "Memory leak in the email service.",
+      "target": "email"
+    },
+    {
+      "flag": "emitRawPii",
+      "description": "Emit raw PII attributes (user.email, demo.payment.card_number, demo.payment.card_cvv) from checkout and payment for the collector redaction example. Not a failure scenario -- controls PII emission, independent of collector-side redaction which always runs.",
+      "target": null
+    },
+    {
+      "flag": "failedReadinessProbe",
+      "description": "readiness probe failure for cart service",
+      "target": "cart"
+    },
+    {
+      "flag": "imageSlowLoad",
+      "description": "slow loading images in the frontend",
+      "target": "image-provider"
+    },
+    {
+      "flag": "intlShippingSlowdown",
+      "description": "Delays international shipping responses to simulate overseas shipping delay",
+      "target": "shipping"
+    },
+    {
+      "flag": "kafkaConsumerDead",
+      "description": "fraud-detection leaves the orders consumer group (unsubscribes and stops polling) while checkout keeps producing, so the group empties (members -> 0) and lag climbs against a zero-member group",
+      "target": "fraud-detection"
+    },
+    {
+      "flag": "kafkaQueueProblems",
+      "description": "Throttles the fraud-detection consumer by sleeping N ms per consumed record (value = per-record delay in ms). Drains slower than checkout produces, so consumer lag climbs. Tune the delay live from this flag.",
+      "target": "fraud-detection"
+    },
+    {
+      "flag": "loadGeneratorFloodHomepage",
+      "description": "Flood the frontend with a large amount of requests.",
+      "target": "frontend"
+    },
+    {
+      "flag": "paymentFailure",
+      "description": "Fail payment service charge requests n%",
+      "target": "payment"
+    },
+    {
+      "flag": "paymentUnreachable",
+      "description": "Payment service is unavailable",
+      "target": "payment"
+    },
+    {
+      "flag": "productCatalogFailure",
+      "description": "Fail product catalog service on a specific product",
+      "target": "product-catalog"
+    },
+    {
+      "flag": "productCatalogLockContention",
+      "description": "Trigger lock contention on the product catalog database",
+      "target": "astronomy-db"
+    },
+    {
+      "flag": "recommendationCacheFailure",
+      "description": "Fail recommendation service cache",
+      "target": "recommendation"
+    }
+  ]
+}

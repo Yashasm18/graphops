@@ -21,7 +21,7 @@ Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It ta
 | --- | --- |
 | **Tracks entered** | **Track 1: Agents That Act on Connected Data** (primary), Track 2: Agent Memory and Coordination, Track 3: Company Brain |
 | **FalkorDB's role** | The agents' only context layer. Every tool is a Cypher query or FalkorDB algorithm, and agent findings, decisions, conversation turns and learned incidents are written back into the graph. Without FalkorDB there is nothing for the agents to reason over, share or remember. |
-| **Data** | 100% synthetic: fictional companies (Acme Shop, Globex Stream), people, services and incidents written for this project. No private or restricted data. |
+| **Data** | **Real public topology:** the `otel` tenant is imported from the open-source [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (its real compose wiring and its 20 real fault flags) by `npm run import:otel`. **Synthetic:** the Acme and Globex companies, and all people, ownership and revenue. No private or restricted data. |
 | **Live deployment** | https://graphops-gr4u.onrender.com (Render + FalkorDB Cloud; a private `GRAPH.COPY` sandbox per visitor) |
 | **Run it** | `docker compose up --build`, or see [Run it](#run-it) |
 | **AI assistance** | Built with an AI coding assistant. See [AI assistance disclosure](#ai-assistance-disclosure) |
@@ -108,20 +108,45 @@ Full method and numbers: [docs/EVAL.md](docs/EVAL.md).
 
 | 200 random fault worlds, no LLM | Result |
 | --- | --- |
-| Root cause found, top-1 (graph ranking) | **72%** (baselines: most recent deploy 17%, random alerting service 22.5%) |
-| Root cause in top-3 | **87.5%** |
-| Culprit deploy found (worlds with one) | **84.3%** (baseline: most recent deploy 50.4%) |
-| Proof gate verifies the true root | **71%**, otherwise WEAK, never REJECTED (0%) |
-| Proof gate verifies an *unrelated* wrong claim | **3%** of 133 |
+| Root cause found, top-1 (graph ranking) | **71.5%** (baselines: most recent deploy 17.5%, random alerting service 17.5%) |
+| Root cause in top-3 | **89%** |
+| Culprit deploy found (worlds with one) | **85%** (baseline: most recent deploy 53.5%) |
+| Proof gate verifies the true root | **71.5%**, otherwise WEAK, never REJECTED (0%) |
+| Proof gate verifies an *unrelated* wrong claim | **2.2%** of 138 |
 
 The cost of the gate is recall. When the topology can't separate the culprit from a neighbour on the same causal chain, the gate says
 `WEAK` instead of guessing, and the Commander has to say so. The benchmark reports that case separately (see EVAL.md).
+
+### Real-world actions, approved by a human
+
+After every decision GraphOps proposes **actions** as `(:Action {status: 'proposed'})` nodes: page the people it chose in the incident
+channel (**Discord or Slack webhook**), and open an **incident issue on GitHub** whose body is the full evidence trail
+(proof verdict, findings, evidence nodes). Nothing is sent until a person clicks **Approve**. The approval and the result
+(issue URL, or the failure) are written back to the graph as `(:User)-[:APPROVED]->(:Action)-[:FOR_DECISION]->(:Decision)`.
+Without credentials, approval runs as a **dry run** that shows the exact payload. In public mode, real sends have a daily cap.
+
+### Real data: the OpenTelemetry Demo
+
+`npm run import:otel` downloads the public [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (`compose.yaml`,
+`compose.full.yaml`, `src/flagd/demo.flagd.json`) and builds the **`otel`** tenant: 19 real services and 35 real dependencies, taken
+from the `*_ADDR`/`*_HOST` wiring and `depends_on`, plus its fault flags. `npm run eval:otel` replays **every flag that breaks a service**
+on a `GRAPH.COPY` sandbox, in three variants, and then the same fault again after it was learned. See [docs/EVAL-OTEL.md](docs/EVAL-OTEL.md).
+
+| OpenTelemetry Demo, 16 real fault flags × 3 variants (46 worlds) | Root cause top-1 | Top-3 | Proof gate VERIFIED |
+| --- | --- | --- | --- |
+| Broken service alerts | **100%** | 100% | 100% |
+| Broken service is silent (only callers alert) | 14.3% | **78.6%** | 100% |
+| Plus an unrelated noise alert | **75%** | 100% | 0% (WEAK: it abstains) |
+| **Same fault again, after learning it** | Historian recalls the learned incident first in **16/16** faults | | |
+
+A silent root is the hardest case. In this topology most services have a single caller, so "the caller broke" and "its silent dependency
+broke" look the same in the graph. GraphOps keeps the true cause in its top 3 (79%) and still verifies it, instead of pretending to know.
 
 ### Mapping to the tracks
 
 | Track | What GraphOps does |
 | --- | --- |
-| **1 · Act on connected data** | Multi-hop root-cause scoring, blast radius with revenue impact, shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
+| **1 · Act on connected data** | Multi-hop root-cause scoring (tested on the **real OpenTelemetry Demo topology and fault flags**), blast radius with revenue impact, **human-approved real actions** (Discord/Slack page, GitHub incident issue), shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 26 tools, and a keyless benchmark |
 | **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (Runbook success counts) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, and **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`) |
 | **3 · Company brain** | People, teams, **projects, tickets, Slack messages**, services, capabilities, deploys, docs, ADRs and incidents in one graph. `trace_change` follows a deploy to its ticket, project and chat thread and surfaces **warnings that were raised and ignored**. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
 
@@ -168,8 +193,9 @@ lessons and runbook edits never touch anyone else's memory) and a small AI budge
 ### Tests and benchmark
 
 ```bash
-npm test          # 12 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
+npm test          # 14 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
 npm run eval      # keyless fault-injection benchmark, writes docs/EVAL.md
+npm run import:otel && npm run eval:otel   # real OpenTelemetry Demo topology + its fault flags
 ```
 Both run in GitHub Actions against a `falkordb/falkordb` service container on every push.
 
@@ -346,7 +372,9 @@ OPTIONAL MATCH (tk)-[:FOLLOWS_UP]->(dec:Decision) RETURN tk.id, tk.title, dec.id
 | --- | --- |
 | `src/tools.js` | 26 graph tools (Cypher + FalkorDB algorithms) shared by the agents, the HTTP API and MCP |
 | `src/proof.js` | Proof gate (SPpaths, maxFlow), GRAPH.COPY sandboxes, what-if, containment search, citation checks |
-| `src/eval.js` | Keyless fault-injection benchmark (`npm run eval`) |
+| `src/eval.js` | Keyless fault-injection benchmark (`npm run eval`, `npm run eval:otel`) |
+| `src/import-otel.js` | Imports the public OpenTelemetry Demo topology and fault flags (`data/otel-demo.json`) |
+| `src/actions.js` | Human-approved actions: Discord/Slack page and GitHub incident issue, audited in the graph |
 | `test/` | Integration tests against a real FalkorDB (`npm test`), run in GitHub Actions |
 | `src/agents.js` | Gemini function-calling loop, triage/historian/commander/chat agents, parallel orchestration, scripted fallback |
 | `src/memory.js` | Investigations, turns, per-user history, decision trace, and resolve → episodic memory |

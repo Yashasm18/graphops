@@ -3,18 +3,23 @@
 //   docker run -p 6379:6379 falkordb/falkordb:latest && npm test
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedTenant } from '../src/seed.js';
+import { seedTenant, resetScenario } from '../src/seed.js';
 import { runTool } from '../src/tools.js';
 import { verifyRootCause, checkCitations } from '../src/proof.js';
 import { startInvestigation, getInvestigation, resolveInvestigation } from '../src/memory.js';
 import { investigate } from '../src/agents.js';
+import { approveAction, listActions } from '../src/actions.js';
 import { getDb, graphFor } from '../src/db.js';
 
 const T = 'ci_acme';
+const O = 'ci_otel';
 const ctx = { agent: 'test' };
 
-before(async () => { await seedTenant(T, { spec: 'acme' }); });
-after(async () => { await (await graphFor(T)).delete().catch(() => {}); (await getDb()).close(); });
+before(async () => { await seedTenant(T, { spec: 'acme' }); await seedTenant(O, { spec: 'otel' }); });
+after(async () => {
+  for (const g of [T, O]) await (await graphFor(g)).delete().catch(() => {});
+  (await getDb()).close();
+});
 
 test('ranks payments-db as the root cause and finds the culprit deploy', async () => {
   const [top] = await runTool(T, 'probable_root_cause', {}, ctx);
@@ -100,4 +105,28 @@ test('multi-agent run (scripted) records a verified decision; resolving teaches 
   const { incident } = await resolveInvestigation(T, investigationId, { resolution: 'rolled back' });
   const recalled = await runTool(T, 'similar_incidents', { services: ['payments-db'] }, ctx);
   assert.equal(recalled[0].incident, incident);
+});
+
+test('real OpenTelemetry Demo topology: paymentUnreachable is traced to payment and verified', async () => {
+  const [top] = await runTool(O, 'probable_root_cause', {}, ctx);
+  assert.equal(top.candidate, 'payment');
+  const proof = await verifyRootCause(O, { root_cause: 'payment', suspect_deploy: 'DEP-O17' });
+  assert.equal(proof.verdict, 'VERIFIED');
+  assert.deepEqual(proof.explained.find((x) => x.alerting === 'frontend-proxy').path, ['frontend-proxy', 'frontend', 'checkout', 'payment']);
+});
+
+test('actions are proposed after a decision and need human approval (dry run without credentials)', async () => {
+  process.env.GRAPHOPS_SCRIPTED = 'true';
+  delete process.env.ACTION_WEBHOOK_URL; delete process.env.GITHUB_TOKEN;
+  await resetScenario(T, 'acme'); // the previous test resolved the incident and cleared the alerts
+  const events = [];
+  const { investigationId } = await investigate({ tenant: T, user: 'ci', question: 'checkout 500s again', emit: (e) => events.push(e) });
+  const proposed = events.find((e) => e.type === 'actions').actions;
+  assert.deepEqual(proposed.map((a) => a.status), ['proposed', 'proposed']);
+  assert.match(proposed[1].payload.body, /Evidence \(from the GraphOps graph\)/);
+  const r = await approveAction(T, proposed[0].id, 'ci-approver');
+  assert.equal(r.status, 'dry_run');
+  const after = await listActions(T, investigationId);
+  assert.equal(after[0].approved_by, 'ci-approver');
+  assert.equal(after[1].status, 'proposed');
 });
