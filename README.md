@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/Yashasm18/graphops/actions/workflows/ci.yml/badge.svg)](https://github.com/Yashasm18/graphops/actions/workflows/ci.yml)
 
+**▶ Live: https://graphops-gr4u.onrender.com** (free tier, so the first load after idling can take ~50 s. Every visitor gets a private sandbox.)
+
 > "Checkout is throwing 500s and customers can't pay." In seconds GraphOps says it's **payments-db**
 > connection exhaustion triggered by **DEP-981** (a retry change shipped 23 minutes ago). This is the same failure as **INC-2041**,
 > so it recommends rolling back and following **RB-PAY-01**, and it pages **Diego** (on call), **Nina** (who fixed it last time) and
@@ -20,6 +22,7 @@ Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB). It ta
 | **Tracks entered** | **Track 1: Agents That Act on Connected Data** (primary), Track 2: Agent Memory and Coordination, Track 3: Company Brain |
 | **FalkorDB's role** | The agents' only context layer. Every tool is a Cypher query or FalkorDB algorithm, and agent findings, decisions, conversation turns and learned incidents are written back into the graph. Without FalkorDB there is nothing for the agents to reason over, share or remember. |
 | **Data** | 100% synthetic: fictional companies (Acme Shop, Globex Stream), people, services and incidents written for this project. No private or restricted data. |
+| **Live deployment** | https://graphops-gr4u.onrender.com (Render + FalkorDB Cloud; a private `GRAPH.COPY` sandbox per visitor) |
 | **Run it** | `docker compose up --build`, or see [Run it](#run-it) |
 | **AI assistance** | Built with an AI coding assistant. See [AI assistance disclosure](#ai-assistance-disclosure) |
 
