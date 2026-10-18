@@ -22,9 +22,20 @@ const state = {
   investigationId: null, running: false, cypherCount: 0,
 };
 
+// A random per-browser id. In public mode the server gives each visitor a
+// private GRAPH.COPY sandbox keyed by it.
+const VISITOR = (() => {
+  try {
+    let v = localStorage.getItem('graphops-visitor');
+    if (!v) { v = Math.random().toString(36).slice(2, 12); localStorage.setItem('graphops-visitor', v); }
+    return v;
+  } catch { return Math.random().toString(36).slice(2, 12); }
+})();
+const HEADERS = { 'Content-Type': 'application/json', 'x-visitor': VISITOR };
+
 async function api(path, opts = {}) {
   const res = await fetch(`${path}${path.includes('?') ? '&' : '?'}tenant=${state.tenant}`, {
-    headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify({ ...opts.body, tenant: state.tenant }) : undefined,
+    headers: HEADERS, ...opts, body: opts.body ? JSON.stringify({ ...opts.body, tenant: state.tenant }) : undefined,
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || res.statusText);
@@ -32,7 +43,7 @@ async function api(path, opts = {}) {
 }
 
 async function streamPost(path, body, onEvent) {
-  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, tenant: state.tenant }) });
+  const res = await fetch(path, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...body, tenant: state.tenant }) });
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -399,6 +410,7 @@ async function run(path, body) {
   } finally {
     state.running = false; $('#go').disabled = false;
     await loadGraph(); await loadMemory();
+    api('/api/status').then((st) => { if (st.public && st.llm) $('#mode').textContent = `Gemini · ${st.models.split(',')[0]} · ${st.llm_runs_left} AI runs left`; }).catch(() => {});
   }
 }
 
@@ -420,7 +432,7 @@ $('#chatform').addEventListener('submit', async (e) => {
 });
 
 $('#seed').addEventListener('click', async () => {
-  if (!confirm(`Wipe and re-seed tenant "${state.tenant}"? This erases its learned memory.`)) return;
+  if (!confirm(`Re-seed "${state.tenant}"? This erases the learned memory in this graph.`)) return;
   await api('/api/seed', { method: 'POST', body: {} });
   state.investigationId = null; await loadGraph(); await loadMemory();
 });
@@ -438,7 +450,11 @@ $('#tenant').addEventListener('change', async (e) => {
 async function init(first = true) {
   const s = await api('/api/status');
   if (first) $('#tenant').innerHTML = s.tenants.map((t) => `<option value="${t.id}">${esc(t.label)}</option>`).join('');
-  $('#mode').textContent = s.llm ? `Gemini · ${s.models.split(',')[0]}` : 'scripted mode (no LLM key)';
+  $('#mode').textContent = s.llm ? `Gemini · ${s.models.split(',')[0]}${s.public ? ` · ${s.llm_runs_left} AI runs left` : ''}` : 'scripted mode (no LLM key)';
+  if (s.public) {
+    $('#seed').textContent = 'Reset my sandbox';
+    $('#seed').title = 'Your own GRAPH.COPY of the company graph. Nobody else sees your changes.';
+  }
   $('#mode').className = `badge ${s.llm ? 'llm' : 'scripted'}`;
   const current = s.tenants.find((t) => t.id === state.tenant);
   if (!current.seeded) await api('/api/seed', { method: 'POST', body: {} });

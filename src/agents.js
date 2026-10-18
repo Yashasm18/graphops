@@ -223,9 +223,10 @@ const SCRIPTED = {
 };
 
 async function runAgent(ctx, prompt, scriptedArgs) {
-  ctx.emit({ type: 'agent_start', agent: ctx.agent, mode: llmEnabled() ? 'llm' : 'scripted' });
+  const useLlm = llmEnabled() && !ctx.scripted;
+  ctx.emit({ type: 'agent_start', agent: ctx.agent, mode: useLlm ? 'llm' : 'scripted' });
   let text;
-  if (llmEnabled()) {
+  if (useLlm) {
     try {
       text = await llmAgent(ctx, prompt);
     } catch (err) {
@@ -243,11 +244,11 @@ async function runAgent(ctx, prompt, scriptedArgs) {
   return text;
 }
 
-export async function investigate({ tenant, user, question, emit }) {
+export async function investigate({ tenant, user, question, emit, scripted = false }) {
   const investigationId = await startInvestigation(tenant, user, question);
   const stats = { queries: 0, tools: 0, started: Date.now() };
-  emit({ type: 'investigation', id: investigationId, question, mode: llmEnabled() ? 'llm' : 'scripted' });
-  const base = { tenant, investigationId, emit, stats };
+  emit({ type: 'investigation', id: investigationId, question, mode: llmEnabled() && !scripted ? 'llm' : 'scripted' });
+  const base = { tenant, investigationId, emit, stats, scripted };
 
   const past = await userHistory(tenant, user, 3);
   const memoryNote = past.length > 1
@@ -276,7 +277,7 @@ export async function investigate({ tenant, user, question, emit }) {
 }
 
 // Follow-up chat with persistent history loaded from the graph.
-export async function chat({ tenant, user, investigationId, message, emit }) {
+export async function chat({ tenant, user, investigationId, message, emit, scripted = false }) {
   const stats = { queries: 0, tools: 0, started: Date.now() };
   const ctx = { tenant, investigationId, emit, stats, agent: 'chat' };
   let history = [];
@@ -287,10 +288,10 @@ export async function chat({ tenant, user, investigationId, message, emit }) {
   }
   const past = await userHistory(tenant, user, 5);
   const prompt = `${past.length ? `(Memory: this user's recent investigations: ${past.map((p) => `${p.id} "${p.question}"`).join('; ')}.)\n` : ''}${message}`;
-  emit({ type: 'agent_start', agent: 'chat', mode: llmEnabled() ? 'llm' : 'scripted' });
+  emit({ type: 'agent_start', agent: 'chat', mode: llmEnabled() && !scripted ? 'llm' : 'scripted' });
   let text;
-  if (!llmEnabled()) {
-    text = 'Chat needs GEMINI_API_KEY. The scripted mode only covers the incident playbook.';
+  if (!llmEnabled() || scripted) {
+    text = scripted ? 'The AI quota for this visitor is used up. Chat needs the LLM, but the incident playbook, What-if and proof tools still work.' : 'Chat needs GEMINI_API_KEY. The scripted mode only covers the incident playbook.';
   } else {
     try {
       text = await llmAgent(ctx, prompt, { maxSteps: 6, history });

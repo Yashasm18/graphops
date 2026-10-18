@@ -20,6 +20,9 @@ export function getDb() {
         tls,
         connectTimeout: 10000,
       },
+    }).catch((err) => {
+      dbPromise = null; // retry on the next call instead of caching the failure
+      throw err;
     });
   }
   return dbPromise;

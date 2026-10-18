@@ -308,8 +308,8 @@ export async function seedTenant(tenant, { reset = true, spec: specName } = {}) 
 
 // Re-fire the scenario alerts and shift deploy times so the scenario is "live"
 // again, without touching anything the agents have learned (memory survives).
-export async function resetScenario(tenant) {
-  const spec = TENANTS[tenant];
+export async function resetScenario(tenant, specName) {
+  const spec = TENANTS[specName || tenant];
   const now = Date.now();
   await cypher(tenant, `MATCH (a:Alert) DELETE a`);
   await cypher(tenant, `MATCH (s:Service) SET s.status = 'healthy'`);

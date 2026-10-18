@@ -1,0 +1,32 @@
+# Render Blueprint: New > Blueprint > pick this repo. Secrets are asked for at creation.
+services:
+  - type: web
+    name: graphops
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /api/status
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PUBLIC_MODE
+        value: "true"
+      - key: LLM_RUNS_PER_VISITOR
+        value: "3"
+      - key: GEMINI_THINKING
+        value: low
+      - key: GEMINI_MODELS
+        value: gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3-flash-preview
+      - key: FALKORDB_TLS
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FALKORDB_HOST
+        sync: false
+      - key: FALKORDB_PORT
+        sync: false
+      - key: FALKORDB_USERNAME
+        sync: false
+      - key: FALKORDB_PASSWORD
+        sync: false

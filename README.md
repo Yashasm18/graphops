@@ -156,6 +156,12 @@ FalkorDB options:
 playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
 the agents choose their own tools. On a 429 they back off and step down from `gemini-3.8-flash` to `gemini-3.5-flash-lite`.
 
+### Deploy it (Render, free)
+
+[`render.yaml`](render.yaml) is a Render Blueprint: **New → Blueprint → this repo**, then paste the FalkorDB and Gemini secrets.
+It runs with `PUBLIC_MODE=true`, so **every visitor gets a private `GRAPH.COPY` sandbox** of the company graph (their investigations,
+lessons and runbook edits never touch anyone else's memory) and a small AI budget, after which the agents use their scripted playbooks.
+
 ### Tests and benchmark
 
 ```bash
