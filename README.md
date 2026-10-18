@@ -31,6 +31,10 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
 
 ## What it does
 
+<p align="center"><img src="docs/architecture.svg" alt="GraphOps architecture (animated)" width="100%"></p>
+
+<details><summary>Text version of the diagram</summary>
+
 ```
             ┌────────────── orchestrator ──────────────┐
             │                                          │
@@ -57,6 +61,8 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
    (:Incident {source:'graphops'})  ← episodic memory the Historian finds next session
    Runbook.success_count += 1       ← procedural memory gets stronger
 ```
+
+</details>
 
 * **Triage** (Track 1) calls `probable_root_cause`. It walks `DEPENDS_ON*0..5` from every alerting service and scores the
   nodes that explain the most alerts, boosting the deepest alerting node and nodes next to a recent deploy. It then calls
