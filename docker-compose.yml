@@ -1,16 +1,23 @@
 # One-command setup: FalkorDB + GraphOps.
-#   GEMINI_API_KEY=... docker compose up
+#   docker compose up --build                      (scripted agents, no key needed)
+#   GEMINI_API_KEY=... docker compose up --build   (Gemini agents)
 # Without a key the agents run their scripted graph playbooks.
 services:
   falkordb:
     image: falkordb/falkordb:latest
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     ports:
       - "6379:6379"   # FalkorDB
       - "3001:3000"   # FalkorDB Browser UI
   graphops:
     build: .
     depends_on:
-      - falkordb
+      falkordb:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:

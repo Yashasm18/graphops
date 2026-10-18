@@ -28,6 +28,15 @@ export function getDb() {
   return dbPromise;
 }
 
+// Human-readable connection errors (node-redis often throws an AggregateError
+// with an empty message when every address is refused).
+export function describeDbError(err) {
+  const inner = err?.errors?.[0] || err;
+  const msg = inner?.message || inner?.code || String(err);
+  const where = `${process.env.FALKORDB_HOST || 'localhost'}:${process.env.FALKORDB_PORT || 6379}`;
+  return `cannot reach FalkorDB at ${where} (${msg}). Start one with "docker run -p 6379:6379 falkordb/falkordb:latest", or set FALKORDB_HOST / FALKORDB_PORT in .env.`;
+}
+
 export function tenantGraphName(tenant) {
   if (!/^[a-z0-9_-]{1,40}$/i.test(tenant)) throw new Error(`invalid tenant: ${tenant}`);
   return `graphops_${tenant}`;

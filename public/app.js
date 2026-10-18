@@ -615,4 +615,4 @@ init()
     $('#tenant').value = state.tenant;
     if (params.get('inv')) await openInvestigation(params.get('inv'));
   })
-  .catch((e) => add(`✖ ${esc(e.message)}. Is FalkorDB reachable? Check .env.`, 'notice'));
+  .catch((e) => add(`✖ ${esc(e.message)}`, 'notice'));

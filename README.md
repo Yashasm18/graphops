@@ -168,20 +168,25 @@ broke" look the same in the graph. GraphOps keeps the true cause in its top 3 (7
 
 ## Run it
 
-**Fastest (Docker):**
+```bash
+git clone https://github.com/Yashasm18/graphops.git && cd graphops
+```
+
+**Fastest (Docker):** starts FalkorDB and GraphOps together.
 
 ```bash
-GEMINI_API_KEY=your-key docker compose up --build
+docker compose up --build                          # no API key needed: agents run their scripted graph playbooks
+GEMINI_API_KEY=your-key docker compose up --build  # with Gemini agents
 # open http://localhost:3000 (the graph seeds itself on first load)
 ```
 
-**Local Node + any FalkorDB:**
+**Local Node 20+ and any FalkorDB:**
 
 ```bash
-cd graphops
+docker run -d -p 6379:6379 falkordb/falkordb:latest   # or use FalkorDB Cloud (see below)
 npm install
-cp .env.example .env      # add GEMINI_API_KEY and FalkorDB connection
-npm run seed              # seeds tenants acme, globex and otel (from data/otel-demo.json)
+cp .env.example .env      # works as is for a local FalkorDB; GEMINI_API_KEY is optional
+npm run seed              # optional: the app also seeds itself on first load
 npm start                 # http://localhost:3000
 ```
 
@@ -189,7 +194,8 @@ FalkorDB options:
 * **Docker:** `docker run -p 6379:6379 -p 3001:3000 falkordb/falkordb:latest` (or use `docker compose` above)
 * **FalkorDB Cloud:** set `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD` (and `FALKORDB_TLS=true` if your instance uses TLS).
 
-**No LLM key or rate-limited?** Set `GRAPHOPS_SCRIPTED=true`, or let it fall back by itself. Each agent then runs a deterministic
+**No LLM key or rate-limited?** Without `GEMINI_API_KEY` the agents run scripted playbooks automatically (follow-up chat needs the key).
+Set `GRAPHOPS_SCRIPTED=true` to force this, or let it fall back by itself on rate limits. Each agent then runs a deterministic
 playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
 the agents choose their own tools. Each Gemini model has its own free-tier quota, so on a 429 the model is put on cooldown and the
 call moves to the next one in `GEMINI_MODELS` (default `gemini-3.8-flash`, then `gemini-3.5-flash-lite`, `gemini-3.7-flash`…). If an
@@ -204,7 +210,7 @@ lessons and runbook edits never touch anyone else's memory) and a small AI budge
 ### Tests and benchmark
 
 ```bash
-npm test          # 14 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
+npm test          # 14 integration tests against FalkorDB (they use their own graphs: graphops_ci_acme, graphops_ci_otel)
 npm run eval      # keyless fault-injection benchmark, writes docs/EVAL.md
 npm run import:otel && npm run eval:otel   # real OpenTelemetry Demo topology + its fault flags
 ```

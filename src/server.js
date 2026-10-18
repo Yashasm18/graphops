@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cypher, listTenants, graphFor, tenantGraphName } from './db.js';
+import { cypher, listTenants, graphFor, tenantGraphName, describeDbError } from './db.js';
 import { seedTenant, resetScenario, TENANTS } from './seed.js';
 import { investigate, chat, llmEnabled } from './agents.js';
 import { listInvestigations, getInvestigation, resolveInvestigation, decisionTrace } from './memory.js';
@@ -63,7 +63,8 @@ const wrap = (fn) => async (req, res) => {
   try {
     res.json(await fn(req, res));
   } catch (err) {
-    res.status(err.status || 500).json({ error: String(err.message || err) });
+    const dbDown = /ECONNREFUSED|ENOTFOUND|AggregateError|Connection timeout|Socket closed/i.test(`${err?.name} ${err?.message} ${err?.errors?.[0]?.code || ''}`);
+    res.status(dbDown ? 503 : err.status || 500).json({ error: dbDown ? describeDbError(err) : String(err.message || err) });
   }
 };
 
@@ -86,7 +87,7 @@ function stream(handler) {
 app.get('/api/status', async (req, res, next) => {
   // Fail closed: without FalkorDB there is nothing for the agents to reason over.
   try { await listTenants(); } catch (err) {
-    return res.status(503).json({ error: `FalkorDB unreachable (${err.message}). GraphOps has no fallback store: every tool, memory and decision lives in the graph.` });
+    return res.status(503).json({ error: `GraphOps ${describeDbError(err)} GraphOps has no fallback store: every tool, memory and decision lives in the graph.` });
   }
   next();
 }, wrap(async (req) => {

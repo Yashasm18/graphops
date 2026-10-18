@@ -449,9 +449,15 @@ export async function resetScenario(tenant, specName) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const tenants = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(TENANTS);
-  for (const t of tenants) {
-    const c = await seedTenant(t);
-    console.log(`seeded ${t}: ${c.nodes} nodes, ${c.edges} edges`);
+  try {
+    for (const t of tenants) {
+      const c = await seedTenant(t);
+      console.log(`seeded ${t}: ${c.nodes} nodes, ${c.edges} edges`);
+    }
+  } catch (err) {
+    const { describeDbError } = await import('./db.js');
+    console.error(`Seeding failed: ${/ECONNREFUSED|AggregateError|ENOTFOUND|timeout/i.test(`${err?.name} ${err?.message}`) ? describeDbError(err) : err.message}`);
+    process.exit(1);
   }
   process.exit(0);
 }
