@@ -72,7 +72,7 @@ app.get('/api/investigations/:id', wrap(async (req) => {
   return { ...(await getInvestigation(t, req.params.id)), trace: await decisionTrace(t, req.params.id) };
 }));
 app.post('/api/investigations/:id/resolve', wrap(async (req) =>
-  resolveInvestigation(tenantOf(req), req.params.id, { resolution: req.body.resolution || 'Mitigated per decision.', resolver: req.body.resolver })));
+  resolveInvestigation(tenantOf(req), req.params.id, { resolution: req.body.resolution || 'Mitigated per decision.', resolver: req.body.resolver, outcome: req.body.outcome })));
 
 app.post('/api/investigate', stream(async (req, emit) => {
   await investigate({ tenant: tenantOf(req), user: req.body.user || 'anonymous', question: req.body.question, emit });

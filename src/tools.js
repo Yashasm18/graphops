@@ -1,6 +1,7 @@
 // Graph tools the agents call. Each tool is a small, named Cypher operation
 // so the agent picks *which* traversal to run and every step stays traceable.
 import { cypher } from './db.js';
+import { verifyRootCause, whatIf, containmentPlan } from './proof.js';
 
 const HOUR = 60 * 60 * 1000;
 const hops = (n, def = 4) => Math.max(1, Math.min(6, Number.isInteger(n) ? n : def));
@@ -22,7 +23,7 @@ export const TOOLS = {
   },
 
   probable_root_cause: {
-    description: 'Rank candidate root causes for the current alerts. It walks DEPENDS_ON paths from every alerting service and scores the nodes that explain the most alerts. It boosts candidates that alert themselves, sit deepest in the chain, or had a recent deploy on them or a direct dependent.',
+    description: 'Rank candidate root causes for the current alerts. It walks DEPENDS_ON paths from every alerting service and scores the nodes that explain the most alerts. It boosts candidates that alert themselves, whose direct callers are failing, that are the deepest alerting node, or that had a recent deploy on them or a direct dependent.',
     parameters: { type: 'object', properties: { window_minutes: { type: 'integer', description: 'Deploy look-back window. Default 180.' } } },
     async run(t, { window_minutes = 180 } = {}) {
       const since = Date.now() - window_minutes * 60000;
@@ -36,21 +37,29 @@ export const TOOLS = {
         WITH c, alerting, explains, depth, count(own) AS own_alerts
         OPTIONAL MATCH (c)-[:DEPENDS_ON]->(down:Service)<-[:FIRED_ON]-(:Alert {status: 'firing'})
         WITH c, alerting, explains, depth, own_alerts, count(DISTINCT down) AS alerting_deps
+        OPTIONAL MATCH (caller:Service)-[:DEPENDS_ON]->(c)
+        OPTIONAL MATCH (caller)<-[:FIRED_ON]-(ca:Alert {status: 'firing'})
+        WITH c, alerting, explains, depth, own_alerts, alerting_deps,
+             count(DISTINCT caller) AS callers, count(DISTINCT CASE WHEN ca IS NULL THEN NULL ELSE caller END) AS alerting_callers
         OPTIONAL MATCH (d:Deploy)-[:CHANGED]->(x:Service)
         WHERE d.at > $since AND (x = c OR (x)-[:DEPENDS_ON]->(c))
         RETURN c.name AS candidate, c.kind AS kind, size(alerting) AS total_alerting,
-               explains, depth, own_alerts, alerting_deps,
-               collect(DISTINCT {deploy: d.id, service: x.name, summary: d.summary}) AS nearby_deploys`,
+               explains, depth, own_alerts, alerting_deps, callers, alerting_callers,
+               collect(DISTINCT {deploy: d.id, service: x.name, summary: d.summary, at: d.at}) AS nearby_deploys`,
       { since }, { readOnly: true });
       const scored = rows.map((r) => {
-        const deploys = r.nearby_deploys.filter((d) => d.deploy);
-        const coverage = r.explains.length / r.total_alerting;
-        const score = coverage * 5 + (r.own_alerts > 0 ? 2 : 0) + (r.own_alerts > 0 && r.alerting_deps === 0 ? 2 : 0)
-          + (deploys.length ? 2 : 0) + r.depth * 0.2;
+        const deploys = r.nearby_deploys.filter((d) => d.deploy).sort((a, b) => b.at - a.at).map(({ at, ...d }) => d);
+                // A real root breaks its immediate callers: the share of direct dependents
+        // that are alerting separates a silent root from the nodes below it.
+        const callerRatio = r.callers ? r.alerting_callers / r.callers : 0;
+        // Parsimony first: explaining more alerts dominates; the rest breaks ties.
+        const score = r.explains.length * 4 + (r.own_alerts > 0 ? 2 : 0) + (r.own_alerts > 0 && r.alerting_deps === 0 ? 1.5 : 0)
+          + callerRatio * 3 + (deploys.length ? 1.5 : 0);
         return {
           candidate: r.candidate, kind: r.kind, score: Math.round(score * 100) / 100,
           explains_alerts_on: r.explains, is_alerting: r.own_alerts > 0,
-          deepest_alerting_node: r.own_alerts > 0 && r.alerting_deps === 0, recent_deploys_nearby: deploys,
+          deepest_alerting_node: r.own_alerts > 0 && r.alerting_deps === 0,
+          alerting_callers: `${r.alerting_callers}/${r.callers}`, recent_deploys_nearby: deploys,
         };
       }).filter((r) => r.explains_alerts_on.length > 1 || r.is_alerting);
       return scored.sort((a, b) => b.score - a.score).slice(0, 5);
@@ -172,15 +181,18 @@ export const TOOLS = {
   },
 
   runbooks_for: {
-    description: 'Procedural memory: runbooks for a service or anything within two hops of it, ranked by how often each one has fixed an incident.',
+    description: 'Procedural memory: current runbooks for a service or anything within two hops of it. Superseded versions are excluded. Ranked by distance, then by times it worked minus times it failed.',
     parameters: { type: 'object', properties: { service: str }, required: ['service'] },
     async run(t, { service }) {
       return cypher(t, `
         MATCH p = (s:Service {name: $service})-[:DEPENDS_ON*0..2]-(x:Service)<-[:FOR]-(rb:Runbook)
+        WHERE NOT ()-[:SUPERSEDES]->(rb)
         WITH rb, x, min(length(p)) AS distance
+        OPTIONAL MATCH (rb)-[:SUPERSEDES]->(old:Runbook)
         RETURN rb.id AS runbook, rb.title AS title, x.name AS for_service, distance,
-               rb.steps AS steps, rb.success_count AS times_it_worked
-        ORDER BY distance, times_it_worked DESC LIMIT 5`, { service }, { readOnly: true });
+               rb.steps AS steps, rb.success_count AS times_it_worked,
+               coalesce(rb.failure_count, 0) AS times_it_failed, old.id AS supersedes, rb.revision_reason AS revised_because
+        ORDER BY distance, times_it_worked - times_it_failed DESC LIMIT 5`, { service }, { readOnly: true });
     },
   },
 
@@ -273,6 +285,68 @@ export const TOOLS = {
     },
   },
 
+  // ---------- Proof and simulation ----------
+  verify_root_cause: {
+    description: 'No path, no claim. Check a root-cause hypothesis against the graph. algo.SPpaths must find a causal DEPENDS_ON path from the alerting services, the suspect deploy must be adjacent and recent, and algo.maxFlow gives the minimum number of links to cut to isolate the node. Returns VERIFIED, WEAK or REJECTED.',
+    parameters: { type: 'object', properties: { root_cause: str, suspect_deploy: str }, required: ['root_cause'] },
+    async run(t, args) { return verifyRootCause(t, args); },
+  },
+
+  what_if: {
+    description: 'Simulate on a GRAPH.COPY sandbox: what breaks if these services go down, optionally after cutting dependency links (fallback modes)? Returns impacted services, capabilities and revenue, before and after. The real graph is never modified.',
+    parameters: {
+      type: 'object',
+      properties: {
+        down: { type: 'array', items: str, description: 'Service names to take down.' },
+        cut: { type: 'array', items: str, description: 'Dependency links to cut, each written "from->to".' },
+      },
+      required: ['down'],
+    },
+    async run(t, { down, cut = [] }) {
+      return whatIf(t, { down, cut: cut.map((c) => String(c).split('->').map((x) => x.trim())).filter((c) => c.length === 2) });
+    },
+  },
+
+  containment_plan: {
+    description: 'While the root cause is still down, find which fallback modes (optional dependency links) to switch on to protect the most revenue. Each option is simulated on its own GRAPH.COPY sandbox. Also lists the capabilities that have no fallback.',
+    parameters: { type: 'object', properties: { root_cause: str }, required: ['root_cause'] },
+    async run(t, args) { return containmentPlan(t, args); },
+  },
+
+  search_knowledge: {
+    description: 'Full-text search, using FalkorDB full-text indexes, across incidents, runbooks, decisions, documents and learned facts. Use it for free-text questions such as "retry storm" or "pgbouncer".',
+    parameters: { type: 'object', properties: { text: str }, required: ['text'] },
+    async run(t, { text }) {
+      const out = [];
+      for (const [label, fields] of [['Incident', 'title, summary'], ['Runbook', 'title, steps'], ['Decision', 'title, rationale'], ['Document', 'title'], ['Fact', 'text']]) {
+        const rows = await cypher(t, `
+          CALL db.idx.fulltext.queryNodes('${label}', $q) YIELD node, score
+          RETURN '${label}' AS label, coalesce(node.id, node.text) AS id, coalesce(node.title, node.text) AS title, score
+          ORDER BY score DESC LIMIT 4`, { q: text }, { readOnly: true }).catch(() => []);
+        out.push(...rows);
+      }
+      return out.sort((a, b) => b.score - a.score).slice(0, 8).map((r) => ({ ...r, score: Math.round(r.score * 100) / 100, fields: undefined }));
+    },
+  },
+
+  revise_runbook: {
+    description: 'Procedural learning: when a human corrects a runbook, create a new version that SUPERSEDES the old one. Every later session will use the new version.',
+    parameters: { type: 'object', properties: { runbook: str, steps: str, reason: str }, required: ['runbook', 'steps', 'reason'] },
+    async run(t, { runbook, steps, reason }, ctx) {
+      const rows = await cypher(t, `
+        MATCH (old:Runbook {id: $id})-[:FOR]->(s:Service)
+        WHERE NOT ()-[:SUPERSEDES]->(old)
+        WITH old, s, coalesce(old.version, 1) + 1 AS v
+        CREATE (new:Runbook {id: split(old.id, '-v')[0] + '-v' + toString(v), title: old.title, steps: $steps,
+                             version: v, success_count: 0, failure_count: 0, revision_reason: $reason, at: $at})
+        CREATE (new)-[:SUPERSEDES]->(old), (new)-[:FOR]->(s)
+        RETURN new.id AS id, old.id AS replaced`, { id: runbook, steps, reason, at: Date.now() });
+      if (!rows[0]) return { error: `${runbook} not found or already superseded` };
+      ctx.emit?.({ type: 'memory', agent: ctx.agent, service: rows[0].id, fact: `${rows[0].id} supersedes ${rows[0].replaced}: ${reason}` });
+      return { created: rows[0].id, supersedes: rows[0].replaced };
+    },
+  },
+
   // ---------- Shared state between agents ----------
   read_investigation: {
     description: 'Read the shared investigation state: the question, and every finding and decision recorded so far by any agent. Read it before you act on what another agent found.',
@@ -338,6 +412,13 @@ export const TOOLS = {
       required: ['title', 'root_cause', 'action', 'rationale', 'page', 'severity'],
     },
     async run(t, a, ctx) {
+      // No path, no claim: the graph must prove the root cause before it is recorded.
+      const proof = await verifyRootCause(t, { root_cause: a.root_cause, suspect_deploy: a.suspect_deploy });
+      ctx.emit?.({ type: 'verification', agent: ctx.agent, ...proof });
+      if (proof.verdict === 'REJECTED' && !ctx.gateOverride) {
+        ctx.gateOverride = true;
+        return { error: `GATE REJECTED: ${proof.reason}. Re-read the findings and pick a root cause the alerting services depend on.`, proof };
+      }
       const id = `DEC-${Date.now().toString(36).toUpperCase()}`;
       await cypher(t, `
         MATCH (inv:Investigation {id: $inv})
@@ -359,10 +440,13 @@ export const TOOLS = {
       { inv: ctx.investigationId, id, title: a.title, action: a.action, rationale: a.rationale, severity: a.severity,
         at: Date.now(), agent: ctx.agent, root: a.root_cause, deploy: a.suspect_deploy || '', runbook: a.runbook || '',
         page: a.page || [], affected: a.affected || [] });
+      await cypher(t, `
+        MATCH (d:Decision {id: $id}) SET d.verdict = $verdict, d.coverage = $coverage, d.proof = $reason`,
+      { id, verdict: proof.verdict, coverage: proof.coverage, reason: proof.reason });
       await cypher(t, `MATCH (inv:Investigation {id: $inv}) SET inv.status = 'decided', inv.decision = $id`,
         { inv: ctx.investigationId, id });
-      ctx.emit?.({ type: 'decision', agent: ctx.agent, id, ...a });
-      return { recorded: id };
+      ctx.emit?.({ type: 'decision', agent: ctx.agent, id, ...a, verdict: proof.verdict, proof });
+      return { recorded: id, verdict: proof.verdict, proof: proof.reason };
     },
   },
 
@@ -383,10 +467,10 @@ export const TOOLS = {
 };
 
 export const AGENT_TOOLSETS = {
-  triage: ['get_active_alerts', 'probable_root_cause', 'blast_radius', 'dependencies', 'dependency_path',
+  triage: ['get_active_alerts', 'probable_root_cause', 'verify_root_cause', 'blast_radius', 'dependencies', 'dependency_path',
     'recent_changes', 'critical_nodes', 'service_clusters', 'read_investigation', 'record_finding'],
-  historian: ['similar_incidents', 'runbooks_for', 'decisions_and_docs', 'who_knows', 'read_investigation', 'record_finding'],
-  commander: ['read_investigation', 'who_to_page', 'owner_of', 'runbooks_for', 'blast_radius', 'record_decision'],
+  historian: ['similar_incidents', 'runbooks_for', 'decisions_and_docs', 'search_knowledge', 'who_knows', 'read_investigation', 'record_finding'],
+  commander: ['read_investigation', 'who_to_page', 'owner_of', 'runbooks_for', 'containment_plan', 'what_if', 'record_decision'],
   chat: Object.keys(TOOLS).filter((n) => n !== 'record_decision'),
 };
 

@@ -67,6 +67,7 @@ export async function getInvestigation(tenant, id) {
     OPTIONAL MATCH (d)-[:PAGES]->(p)
     OPTIONAL MATCH (d)-[:BASED_ON]->(f)
     RETURN d.id AS id, d.title AS title, d.action AS action, d.rationale AS rationale, d.severity AS severity,
+           d.verdict AS verdict, d.coverage AS coverage, d.proof AS proof, d.outcome AS outcome,
            root.name AS root_cause, dep.id AS suspect_deploy, rb.id AS runbook,
            collect(DISTINCT p.name) AS paged, collect(DISTINCT f.id) AS based_on`, { id }, { readOnly: true });
   inv.turns = await getTurns(tenant, id, 50);
@@ -88,9 +89,20 @@ export async function decisionTrace(tenant, id) {
 
 // Closing the loop: a resolved investigation becomes an Incident in episodic
 // memory, and the runbook that worked gains procedural weight.
-export async function resolveInvestigation(tenant, id, { resolution, resolver }) {
+export async function resolveInvestigation(tenant, id, { resolution, resolver, outcome = 'worked' }) {
   const inv = await getInvestigation(tenant, id);
   if (!inv?.decision) throw new Error('investigation has no decision yet');
+  if (outcome === 'failed') {
+    // Procedural memory learns from failure too: the runbook loses rank and the
+    // investigation reopens so the agents try the next-best option.
+    await cypher(tenant, `
+      MATCH (inv:Investigation {id: $id})-[:CONCLUDED]->(d:Decision)
+      SET d.outcome = 'failed', inv.status = 'reopened'
+      WITH d OPTIONAL MATCH (d)-[:USES]->(rb:Runbook)
+      FOREACH (_ IN CASE WHEN rb IS NULL THEN [] ELSE [1] END | SET rb.failure_count = coalesce(rb.failure_count, 0) + 1)`, { id });
+    await addTurn(tenant, id, 'system', `Fix did not work: ${resolution}`);
+    return { outcome: 'failed', runbook_penalised: inv.decision.runbook || null };
+  }
   const d = inv.decision;
   const incId = `INC-${3000 + Math.floor(Math.random() * 6000)}`;
   const resolvedBy = resolver || d.paged[0];
@@ -99,7 +111,7 @@ export async function resolveInvestigation(tenant, id, { resolution, resolver })
     CREATE (inc:Incident {id: $incId, title: d.title, severity: d.severity, status: 'resolved', at: $at,
                           summary: $resolution, trigger: coalesce($deploy, 'unknown'), source: 'graphops'})
     CREATE (inc)-[:FROM_INVESTIGATION]->(inv)
-    SET inv.status = 'resolved'
+    SET inv.status = 'resolved', d.outcome = 'worked'
     WITH inc, d
     OPTIONAL MATCH (d)-[:ROOT_CAUSE]->(root:Service)
     FOREACH (_ IN CASE WHEN root IS NULL THEN [] ELSE [1] END | CREATE (inc)-[:ROOT_CAUSE]->(root))

@@ -1,5 +1,7 @@
 # ◈ GraphOps: a multi-agent incident commander on FalkorDB
 
+[![CI](https://github.com/Yashasm18/graphops/actions/workflows/ci.yml/badge.svg)](https://github.com/Yashasm18/graphops/actions/workflows/ci.yml)
+
 > "Checkout is throwing 500s and customers can't pay." In seconds GraphOps says it's **payments-db**
 > connection exhaustion triggered by **DEP-981** (a retry change shipped 23 minutes ago). This is the same failure as **INC-2041**,
 > so it recommends rolling back and following **RB-PAY-01**, and it pages **Diego** (on call), **Nina** (who fixed it last time) and
@@ -78,11 +80,45 @@ Each of these is a multi-hop traversal. GraphOps gives its agents those traversa
 * **Chat** answers follow-ups with every tool plus guarded read-only text-to-Cypher. It loads the conversation
   history *from the graph* (`(:Investigation)-[:HAS_TURN]->(:Turn)-[:NEXT]->(:Turn)`), and `remember_fact` lets it learn from users.
 
+### Proof, not vibes
+
+The LLM proposes. **The graph decides.**
+
+* **No path, no claim.** `record_decision` runs a proof gate before anything is stored. `algo.SPpaths` must return a causal
+  `DEPENDS_ON` path from the alerting services to the claimed root cause, the suspect deploy must be adjacent and recent, and a
+  silent (healthy) node also needs failing direct callers. `algo.maxFlow` reports how many links you would have to cut to isolate it.
+  The verdict is `VERIFIED`, `WEAK` or `REJECTED`. A rejected claim is sent back to the Commander to fix.
+* **Citations are checked.** Every id an agent mentions (`INC-2041`, `DEP-981`, `` `payments-db` ``…) is looked up in the graph,
+  and the UI shows `✓ 6/6 cited nodes exist in the graph`, or flags the unknown ones.
+* **Simulate before you act.** `what_if` and `containment_plan` copy the tenant graph with `GRAPH.COPY` and run on the copy.
+  Containment tries every combination of up to three fallback modes and picks the smallest set that protects the most revenue,
+  then **replays it** on the sandbox (real `DELETE`s, recomputed impact) to prove it. Example: in a Kafka outage, turning on two
+  outbox fallbacks *together* keeps **Checkout & Payments ($4,200/min)** up. Neither one does it alone.
+* **It learns from failure, too.** *Didn't work* lowers the runbook's rank, and a human correction creates `RB-PAY-01-v2 -[:SUPERSEDES]-> RB-PAY-01`.
+  Every later session uses the new version.
+
+### Measured: keyless benchmark
+
+`npm run eval` injects random faults into a `GRAPH.COPY` sandbox (silent root causes, unrelated noise alerts, decoy deploys that
+are often newer than the real culprit) and scores the graph tools against hidden ground truth, with no LLM involved.
+Full method and numbers: [docs/EVAL.md](docs/EVAL.md).
+
+| 200 random fault worlds, no LLM | Result |
+| --- | --- |
+| Root cause found, top-1 (graph ranking) | **72%** (baselines: most recent deploy 17%, random alerting service 22.5%) |
+| Root cause in top-3 | **87.5%** |
+| Culprit deploy found (worlds with one) | **84.3%** (baseline: most recent deploy 50.4%) |
+| Proof gate verifies the true root | **71%**, otherwise WEAK, never REJECTED (0%) |
+| Proof gate verifies an *unrelated* wrong claim | **3%** of 133 |
+
+The cost of the gate is recall. When the topology can't separate the culprit from a neighbour on the same causal chain, the gate says
+`WEAK` instead of guessing, and the Commander has to say so. The benchmark reports that case separately (see EVAL.md).
+
 ### Mapping to the tracks
 
 | Track | What GraphOps does |
 | --- | --- |
-| **1 · Act on connected data** | Multi-hop root-cause scoring, blast radius with revenue impact, shortest-path propagation, PageRank, betweenness and CDLP as agent tools, an **MCP server** exposing all 19 tools, and decisions you can explain from evidence |
+| **1 · Act on connected data** | Multi-hop root-cause scoring, blast radius with revenue impact, shortest-path propagation, PageRank, betweenness and CDLP as agent tools, a **proof gate** (`algo.SPpaths` + `algo.maxFlow`: no path, no claim), **what-if and containment simulation on `GRAPH.COPY` sandboxes**, an **MCP server** exposing all 24 tools, and a keyless benchmark |
 | **2 · Memory & coordination** | Episodic (Incidents), semantic (Facts/ADRs) and procedural (Runbook success counts) memory. Persistent conversation turns, per-user history (`(:User)-[:STARTED]->(:Investigation)`), parallel agents sharing state only through the graph with concurrent writes, and **one isolated graph per tenant** (`graphops_acme`, `graphops_globex`) |
 | **3 · Company brain** | People, teams, services, capabilities, deploys, docs, ADRs and incidents in one graph. Who owns what, who knows what (`who_knows`), decisions traced to their motivating incident (`ADR-022 -[:MOTIVATED_BY]-> INC-2041`), and answers with sources |
 
@@ -119,6 +155,14 @@ FalkorDB options:
 **No LLM key or rate-limited?** Set `GRAPHOPS_SCRIPTED=true`, or let it fall back by itself. Each agent then runs a deterministic
 playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
 the agents choose their own tools. On a 429 they back off and step down from `gemini-3.8-flash` to `gemini-3.5-flash-lite`.
+
+### Tests and benchmark
+
+```bash
+npm test          # 11 integration tests against FalkorDB (uses its own graph, graphops_ci_acme)
+npm run eval      # keyless fault-injection benchmark, writes docs/EVAL.md
+```
+Both run in GitHub Actions against a `falkordb/falkordb` service container on every push.
 
 ### Use the graph tools from Claude, Cursor or any MCP client
 
@@ -242,11 +286,41 @@ RETURN d, f, e
 **9. Learning from a resolved incident** (`resolveInvestigation` in [`src/memory.js`](src/memory.js)). The decision becomes an `Incident` with
 `ROOT_CAUSE`, `AFFECTED`, `RESOLVED_BY`, `MITIGATED_WITH` and `TRIGGERED_BY` edges, and `SET rb.success_count = rb.success_count + 1`.
 
+**10. Proof gate** (`verifyRootCause` in [`src/proof.js`](src/proof.js)).
+```cypher
+MATCH (a:Service {name: $alerting}), (r:Service {name: $root})
+CALL algo.SPpaths({sourceNode: a, targetNode: r, relTypes: ['DEPENDS_ON'], pathCount: 1, maxLen: 6})
+YIELD path RETURN [n IN nodes(path) | n.name] AS path;
+
+MATCH (e:Service) WHERE NOT ()-[:DEPENDS_ON]->(e) AND (e)-[:DEPENDS_ON*1..8]->(:Service {name: $root})
+WITH collect(e) AS entries MATCH (r:Service {name: $root})
+CALL algo.maxFlow({sourceNodes: entries, targetNodes: [r], relationshipTypes: ['DEPENDS_ON'], capacityProperty: 'capacity'})
+YIELD maxFlow RETURN maxFlow   // = minimum links to cut to isolate the root (Menger)
+```
+
+**11. What-if and containment on a sandbox** (`whatIf`, `containmentPlan`). `GRAPH.COPY graphops_acme graphops_acme_sim_x`, then:
+```cypher
+MATCH (cap:Capability)<-[:POWERS]-(s:Service)
+OPTIONAL MATCH p = (s)-[:DEPENDS_ON*0..8]->(d:Service) WHERE d.name IN $down
+  AND none(r IN relationships(p) WHERE (startNode(r).name + '->' + endNode(r).name) IN $cut)
+WITH cap, count(p) AS hits
+RETURN cap.name, cap.revenue_per_min, hits > 0 AS impacted
+```
+
+**12. Full-text knowledge search** (`search_knowledge`).
+```cypher
+CALL db.idx.fulltext.createNodeIndex('Incident', 'title', 'summary');
+CALL db.idx.fulltext.queryNodes('Incident', $q) YIELD node, score RETURN node.id, node.title, score
+```
+
 ## Code map
 
 | File | Purpose |
 | --- | --- |
-| `src/tools.js` | 19 graph tools (Cypher + FalkorDB algorithms) shared by the agents, the HTTP API and MCP |
+| `src/tools.js` | 24 graph tools (Cypher + FalkorDB algorithms) shared by the agents, the HTTP API and MCP |
+| `src/proof.js` | Proof gate (SPpaths, maxFlow), GRAPH.COPY sandboxes, what-if, containment search, citation checks |
+| `src/eval.js` | Keyless fault-injection benchmark (`npm run eval`) |
+| `test/` | Integration tests against a real FalkorDB (`npm test`), run in GitHub Actions |
 | `src/agents.js` | Gemini function-calling loop, triage/historian/commander/chat agents, parallel orchestration, scripted fallback |
 | `src/memory.js` | Investigations, turns, per-user history, decision trace, and resolve → episodic memory |
 | `src/seed.js` | Multi-tenant seed data (Acme e-commerce, Globex streaming) |

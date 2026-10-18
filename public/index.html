@@ -60,10 +60,18 @@
     <nav class="tabs">
       <button data-tab="trace" class="active">Why? trace</button>
       <button data-tab="cypher">Cypher log</button>
+      <button data-tab="whatif">What-if</button>
       <button data-tab="memory">Memory</button>
     </nav>
     <div id="tab-trace" class="tab active"><div class="empty">The decision's evidence chain will appear here: Decision → Findings → graph nodes.</div></div>
     <div id="tab-cypher" class="tab"><div class="empty">Every graph query the agents run is logged here.</div></div>
+    <div id="tab-whatif" class="tab">
+      <h4>Simulate on a GRAPH.COPY sandbox</h4>
+      <p class="hint">Copies the tenant graph, runs the simulation on the copy, then deletes it. The real graph is never touched.</p>
+      <div class="row"><select id="wi-service"></select></div>
+      <div class="row"><button id="wi-break" class="primary">What breaks?</button><button id="wi-contain">Containment plan</button></div>
+      <div id="wi-out"></div>
+    </div>
     <div id="tab-memory" class="tab"></div>
   </section>
 </main>

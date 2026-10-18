@@ -93,3 +93,14 @@ h4 { margin: 4px 0 8px; font-size: 12px; color: var(--muted); text-transform: up
   main { grid-template-columns: 1fr; height: auto; }
   .center { height: 70vh; } .left, .right { border: 0; } .timeline { max-height: 60vh; } .tab { max-height: 60vh; }
 }
+
+.proof { border-radius: 8px; padding: 8px 10px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; }
+.proof.VERIFIED { border-color: #1f5c45; background: #0f1d18; } .proof.WEAK { border-color: #5c4a1f; background: #1d180f; } .proof.REJECTED { border-color: #5c1f28; background: #1d0f12; }
+.verdict { font: 600 10px var(--mono); letter-spacing: .6px; padding: 1px 6px; border-radius: 4px; }
+.verdict.VERIFIED { background: var(--good); color: #062; } .verdict.WEAK { background: var(--warn); color: #3a2a00; } .verdict.REJECTED { background: var(--bad); color: #fff; }
+.path { font: 11px var(--mono); color: var(--muted); margin-top: 3px; }
+.cites { font-size: 11px; color: var(--good); margin-top: -4px; padding-left: 4px; } .cites.bad { color: var(--warn); }
+.wi-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 10px; background: var(--panel); }
+.wi-card .big { font-size: 20px; font-weight: 700; } .wi-card ul { margin: 6px 0; padding-left: 18px; }
+.good { color: var(--good); } .bad { color: var(--bad); }
+#wi-service { width: 100%; }

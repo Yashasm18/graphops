@@ -1,0 +1,21 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports: ['6379:6379']
+    env:
+      FALKORDB_HOST: localhost
+      FALKORDB_PORT: 6379
+      GRAPHOPS_SCRIPTED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run seed -- acme
+      - run: npm run eval -- 100

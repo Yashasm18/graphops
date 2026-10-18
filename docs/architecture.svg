@@ -132,7 +132,7 @@
   <!-- MCP side box -->
   <rect x="60" y="420" width="192" height="70" rx="12" fill="#121722" stroke="#3a4560"/>
   <text x="78" y="448" class="t" font-weight="600">MCP server</text>
-  <text x="78" y="470" class="s muted">19 graph tools for Claude, Cursor…</text>
+  <text x="78" y="470" class="s muted">24 graph tools for Claude, Cursor…</text>
   <path d="M252,455 L300,455" class="flow slow" stroke="#7d8aa5" marker-end="url(#ah-m)"/>
 
   <!-- graph -> commander -->

@@ -121,6 +121,7 @@ async function loadGraph() {
   state.graph = await api('/api/graph');
   state.byName = new Map(state.graph.nodes.map((n) => [n.name, n]));
   renderGraph();
+  fillWhatIf();
 }
 
 const pulseTimers = new Map();
@@ -228,6 +229,13 @@ function onEvent(e) {
     case 'decision':
       renderDecision(e);
       break;
+    case 'verification':
+      add(proofHtml(e), `proof ${e.verdict}`);
+      pulse([e.root_cause, ...(e.explained || []).flatMap((x) => x.path)], 'commander');
+      break;
+    case 'citations':
+      add(`${e.unknown.length ? '⚠' : '✓'} ${e.verified}/${e.checked} cited nodes exist in the graph${e.unknown.length ? ` · unknown: ${esc(e.unknown.join(', '))}` : ''}`, `cites ${e.unknown.length ? 'bad' : ''}`);
+      break;
     case 'notice':
       add(`⚠ ${chip(e.agent || 'orchestrator')} ${esc(e.text)}`, 'notice');
       break;
@@ -243,10 +251,18 @@ function onEvent(e) {
   }
 }
 
+function proofHtml(p) {
+  return `<div class="head"><span><span class="verdict ${esc(p.verdict)}">${esc(p.verdict)}</span> <b>Proof gate</b> · no path, no claim</span><span class="ms">algo.SPpaths · algo.maxFlow</span></div>
+    <div>${esc(p.reason)}${p.isolation_min_cut != null ? ` · isolating it takes ≥ ${p.isolation_min_cut} link cut(s) (max-flow)` : ''}</div>
+    ${(p.explained || []).map((x) => `<div class="path">${esc(x.path.join(' → '))}</div>`).join('')}
+    ${p.unexplained?.length ? `<div class="path bad">no causal path: ${esc(p.unexplained.join(', '))}</div>` : ''}
+    ${p.deploy ? `<div class="path">${esc(p.deploy.id)} on ${esc(p.deploy.service || '?')}: ${p.deploy.adjacent ? 'adjacent' : 'NOT adjacent'}, ${p.deploy.recent ? 'recent' : 'NOT recent'}</div>` : ''}`;
+}
+
 function renderDecision(d) {
   const el = document.createElement('div');
   el.className = 'decision';
-  el.innerHTML = `<h3><span class="sev">${esc(d.severity)}</span>${esc(d.title)}</h3>
+  el.innerHTML = `<h3><span class="sev">${esc(d.severity)}</span>${esc(d.title)} ${d.verdict ? `<span class="verdict ${esc(d.verdict)}">${esc(d.verdict)}</span>` : ''}</h3>
     <dl>
       <dt>Root cause</dt><dd><span class="pill" data-focus="${esc(d.root_cause)}">${esc(d.root_cause)}</span></dd>
       ${d.suspect_deploy ? `<dt>Suspect</dt><dd><span class="pill" data-focus="${esc(d.suspect_deploy)}">${esc(d.suspect_deploy)}</span></dd>` : ''}
@@ -254,7 +270,7 @@ function renderDecision(d) {
       <dt>Page</dt><dd>${(d.page || []).map((p) => `<span class="pill" data-focus="${esc(p)}">${esc(p)}</span>`).join('')}</dd>
       <dt>Action</dt><dd>${md(d.action)}</dd>
     </dl>
-    <div class="actions"><button class="primary" data-resolve>Mark resolved & remember</button><button data-why>Why?</button></div>`;
+    <div class="actions"><button class="primary" data-resolve>Fix worked: remember</button><button data-failed>Didn't work</button><button data-why>Why?</button></div>`;
   tl().appendChild(el);
   tl().scrollTop = tl().scrollHeight;
 }
@@ -270,6 +286,14 @@ document.addEventListener('click', async (e) => {
     const r = await api(`/api/investigations/${state.investigationId}/resolve`, { method: 'POST', body: { resolution } });
     e.target.textContent = `Learned as ${r.incident} ✓`;
     add(`🧠 Stored <b>${esc(r.incident)}</b> in episodic memory (resolved by ${esc(r.resolved_by)}). The runbook's success count went up. The next investigation will recall it.`, 'finding historian');
+    await loadGraph(); await loadMemory();
+  }
+  if (e.target.matches('[data-failed]')) {
+    const resolution = prompt('What happened?', 'Rolled back but connections stayed saturated.');
+    if (resolution === null) return;
+    const r = await api(`/api/investigations/${state.investigationId}/resolve`, { method: 'POST', body: { resolution, outcome: 'failed' } });
+    e.target.disabled = true; e.target.textContent = 'Recorded as failed';
+    add(`🧠 Recorded the failure.${r.runbook_penalised ? ` ${esc(r.runbook_penalised)} lost rank in procedural memory.` : ''} Investigate again and the agents will prefer the next-best option.`, 'finding historian');
     await loadGraph(); await loadMemory();
   }
   const m = e.target.closest('[data-inv]');
@@ -327,11 +351,44 @@ async function openInvestigation(id) {
   add(`<div class="head"><b>${esc(id)}</b><span class="ms">from memory · ${esc(inv.status)}</span></div><div>${esc(inv.question)}</div>`, 'say');
   for (const f of inv.findings) onEvent({ type: 'finding', ...f });
   for (const t of inv.turns.slice(1)) add(`<div class="head">${chip(t.agent || t.role)}</div><div>${md(t.text)}</div>`, `${t.agent || ''} say`);
+  if (inv.decision?.verdict) add(`<div class="head"><span><span class="verdict ${esc(inv.decision.verdict)}">${esc(inv.decision.verdict)}</span> <b>Proof gate</b></span></div><div>${esc(inv.decision.proof || '')}</div>`, `proof ${esc(inv.decision.verdict)}`);
   if (inv.decision) renderDecision({ ...inv.decision, page: inv.decision.paged });
-  if (inv.status === 'resolved') tl().querySelector('[data-resolve]:last-of-type')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
+  if (inv.status === 'resolved') tl().querySelector('.decision:last-of-type .actions')?.replaceWith(Object.assign(document.createElement('span'), { className: 'status resolved', textContent: 'resolved · in memory' }));
   $('#chatform').classList.remove('hidden');
   await showTrace(id); switchTab('trace');
 }
+
+// ---------------- What-if simulator ----------------
+function fillWhatIf() {
+  const svcs = state.graph.nodes.filter((n) => n.label === 'Service').map((n) => n.name).sort();
+  const sel = $('#wi-service'); const cur = sel.value;
+  sel.innerHTML = svcs.map((n) => `<option ${n === (cur || 'kafka-events') ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+const money = (n) => `$${Number(n).toLocaleString()}/min`;
+$('#wi-break').addEventListener('click', async () => {
+  const svc = $('#wi-service').value; $('#wi-out').innerHTML = '<div class="empty">Copying graph and simulating…</div>';
+  const r = await api('/api/tools/what_if', { method: 'POST', body: { args: { down: [svc] } } });
+  if (r.error) { $('#wi-out').innerHTML = `<div class="wi-card bad">${esc(r.error)}</div>`; return; }
+  $('#wi-out').innerHTML = `<div class="wi-card"><div>If <b>${esc(svc)}</b> goes down:</div>
+    <div class="big bad">${money(r.before.revenue_at_risk_per_min)} at risk</div>
+    <div>Capabilities: <ul>${r.before.impacted_capabilities.map((c) => `<li>${esc(c)}</li>`).join('') || '<li>none</li>'}</ul></div>
+    <div>${r.before.impacted_services.length} services affected</div>
+    <div>${r.before.impacted_services.map((x) => `<span class="pill" data-focus="${esc(x)}">${esc(x)}</span>`).join('')}</div>
+    <div class="path">${esc(r.sandbox)}</div></div>`;
+  pulse(r.before.impacted_services, 'commander');
+});
+$('#wi-contain').addEventListener('click', async () => {
+  const svc = $('#wi-service').value; $('#wi-out').innerHTML = '<div class="empty">Searching fallback combinations on a sandbox…</div>';
+  const r = await api('/api/tools/containment_plan', { method: 'POST', body: { args: { root_cause: svc } } });
+  if (r.error) { $('#wi-out').innerHTML = `<div class="wi-card bad">${esc(r.error)}</div>`; return; }
+  $('#wi-out').innerHTML = `<div class="wi-card"><div>While <b>${esc(svc)}</b> is down (${money(r.baseline.revenue_at_risk_per_min)} at risk):</div>
+    <div class="big ${r.revenue_protected_per_min ? 'good' : 'bad'}">${r.revenue_protected_per_min ? `protect ${money(r.revenue_protected_per_min)}` : 'no fallback helps'}</div>
+    ${r.plan.length ? `<div>Switch on:<ul>${r.plan.map((p) => `<li>${esc(p.switch_on)} <span class="path">${esc(p.link)}</span></li>`).join('')}</ul></div>` : ''}
+    ${r.protects.length ? `<div class="good">Keeps up: ${esc(r.protects.join(', '))}</div>` : ''}
+    <div class="${r.still_down.length ? 'bad' : 'good'}">Still down: ${esc(r.still_down.join(', ') || 'nothing')}</div>
+    <div class="path">${r.combinations_simulated} fallback combinations simulated · plan replayed on the copy: ${r.verified_by_replay ? 'confirmed' : 'mismatch'}</div>
+    <div class="path">${esc(r.note)}</div></div>`;
+});
 
 // ---------------- Actions ----------------
 async function run(path, body) {

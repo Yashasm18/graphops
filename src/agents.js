@@ -5,6 +5,7 @@ import { GoogleGenAI } from '@google/genai';
 import { traceStore, cypher } from './db.js';
 import { TOOLS, AGENT_TOOLSETS, runTool } from './tools.js';
 import { startInvestigation, addTurn, getTurns, userHistory } from './memory.js';
+import { checkCitations } from './proof.js';
 
 const MODELS = (process.env.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3-flash-preview').split(',').map((m) => m.trim());
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
@@ -30,8 +31,9 @@ Record findings of kind precedent, runbook and knowledge.`,
 Rules:
 - root_cause is the service named in Triage's root_cause finding, i.e. the failing component, not the service whose deploy triggered it.
   Put the triggering deploy in suspect_deploy.
+- Call containment_plan on the root cause. If it finds fallback modes that protect revenue, put "switch on <fallback>" steps first in the action.
 - Call who_to_page on that root_cause service. Page the top 2 or 3 people it returns, so the on-call engineer is joined by whoever has fixed this before.
-- Call record_decision exactly once. Include severity, root cause, suspect deploy, runbook, concrete action steps and the people to page.
+- Call record_decision exactly once. It runs a graph proof gate. If it returns GATE REJECTED, fix the root cause and call it again. Include severity, root cause, suspect deploy, runbook, concrete action steps and the people to page.
 Then give a short incident brief for humans that names each paged person and says why they were paged.`,
   chat: `You are the GraphOps assistant. Answer questions about this company's systems, people, incidents and decisions
 by querying the graph. Cite the nodes you used, such as INC-2041 or ADR-022. If the user teaches you a durable fact about a service,
@@ -206,12 +208,14 @@ const SCRIPTED = {
     const suspect = inv.findings.find((f) => f.kind === 'suspect_change')?.summary.split(' ')[0];
     const rb = inv.findings.find((f) => f.kind === 'runbook')?.summary.split(' ')[0];
     const page = pagees.slice(0, 3).map((p) => p.person);
+    const contain = root ? await callTool(ctx, 'containment_plan', { root_cause: root }) : { plan: [] };
+    const fallbackSteps = (contain.plan || []).map((p) => `Switch on fallback: ${p.switch_on} (${p.link}). `).join('');
     const severity = blast.revenue_at_risk_per_min > 2000 ? 'SEV1' : 'SEV2';
     await callTool(ctx, 'record_decision', {
       title: `${root} outage${suspect ? ` after ${suspect}` : ''}`,
       root_cause: root, suspect_deploy: suspect || '', runbook: rb || '', severity, page,
       affected: [root, ...blast.upstream_services.map((s) => s.service)],
-      action: `${suspect ? `Roll back ${suspect}. ` : ''}${rb ? `Follow ${rb}. ` : ''}Watch error rates on ${blast.upstream_services.slice(0, 3).map((s) => s.service).join(', ')}.`,
+      action: `${fallbackSteps}${suspect ? `Roll back ${suspect}. ` : ''}${rb ? `Follow ${rb}. ` : ''}Watch error rates on ${blast.upstream_services.slice(0, 3).map((s) => s.service).join(', ')}.`,
       rationale: inv.findings.map((f) => f.summary).join(' | ').slice(0, 900),
     });
     return `**${severity}**: ${root}${suspect ? ` (suspect ${suspect})` : ''}. Paging ${page.join(', ')}.${rb ? ` Runbook ${rb}.` : ''}`;
@@ -232,6 +236,9 @@ async function runAgent(ctx, prompt, scriptedArgs) {
     text = await SCRIPTED[ctx.agent](ctx, scriptedArgs);
   }
   ctx.emit({ type: 'agent_done', agent: ctx.agent, text });
+  // Grounding check: every id the agent cites must exist in the graph.
+  const cites = await checkCitations(ctx.tenant, text).catch(() => null);
+  if (cites?.checked) ctx.emit({ type: 'citations', agent: ctx.agent, ...cites });
   await addTurn(ctx.tenant, ctx.investigationId, 'assistant', text, ctx.agent);
   return text;
 }
@@ -293,6 +300,8 @@ export async function chat({ tenant, user, investigationId, message, emit }) {
   }
   if (investigationId) await addTurn(tenant, investigationId, 'assistant', text, 'chat');
   emit({ type: 'agent_done', agent: 'chat', text });
+  const cites = await checkCitations(tenant, text).catch(() => null);
+  if (cites?.checked) emit({ type: 'citations', agent: 'chat', ...cites });
   emit({ type: 'done', stats: { ...stats, ms: Date.now() - stats.started } });
   return text;
 }

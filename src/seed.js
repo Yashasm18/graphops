@@ -67,23 +67,23 @@ export const TENANTS = {
       ['web-frontend', 'api-gateway'], ['mobile-bff', 'api-gateway'],
       ['api-gateway', 'auth-service'], ['api-gateway', 'catalog-service'],
       ['api-gateway', 'search-service'], ['api-gateway', 'cart-service'],
-      ['api-gateway', 'checkout-service'], ['api-gateway', 'recommendations-service'],
+      ['api-gateway', 'checkout-service'], ['api-gateway', 'recommendations-service', true, 'Hide recommendation widgets (ADR-031)'],
       ['auth-service', 'user-service'], ['auth-service', 'redis-cache'],
       ['user-service', 'users-db'],
       ['catalog-service', 'elasticsearch'], ['catalog-service', 'redis-cache'],
       ['search-service', 'elasticsearch'],
-      ['recommendations-service', 'catalog-service'], ['recommendations-service', 'kafka-events'],
-      ['cart-service', 'redis-cache'], ['cart-service', 'pricing-service'], ['cart-service', 'inventory-service'],
+      ['recommendations-service', 'catalog-service', true, 'Serve the static popular-items list'], ['recommendations-service', 'kafka-events'],
+      ['cart-service', 'redis-cache'], ['cart-service', 'pricing-service'], ['cart-service', 'inventory-service', true, 'Optimistic stock check, reconcile on fulfilment'],
       ['pricing-service', 'catalog-service'],
       ['checkout-service', 'cart-service'], ['checkout-service', 'payments-service'],
-      ['checkout-service', 'orders-service'], ['checkout-service', 'pricing-service'],
-      ['payments-service', 'payments-db'], ['payments-service', 'fraud-service'],
-      ['payments-service', 'stripe-api'], ['payments-service', 'kafka-events'],
-      ['fraud-service', 'payments-db'], ['fraud-service', 'redis-cache'],
-      ['orders-service', 'orders-db'], ['orders-service', 'kafka-events'], ['orders-service', 'inventory-service'],
+      ['checkout-service', 'orders-service'], ['checkout-service', 'pricing-service', true, 'Use prices locked when the item was added to the cart'],
+      ['payments-service', 'payments-db'], ['payments-service', 'fraud-service', true, 'Fail open: rules-only fraud check for orders under $200'],
+      ['payments-service', 'stripe-api'], ['payments-service', 'kafka-events', true, 'Buffer payment events in a local outbox'],
+      ['fraud-service', 'payments-db', true, 'Score from cached risk profiles in redis-cache'], ['fraud-service', 'redis-cache'],
+      ['orders-service', 'orders-db'], ['orders-service', 'kafka-events', true, 'Write to the outbox table and replay later'], ['orders-service', 'inventory-service'],
       ['inventory-service', 'orders-db'],
       ['shipping-service', 'orders-service'], ['shipping-service', 'kafka-events'],
-      ['notifications-service', 'kafka-events'], ['notifications-service', 'user-service'],
+      ['notifications-service', 'kafka-events'], ['notifications-service', 'user-service', true, 'Send emails from cached profiles'],
       ['analytics-pipeline', 'kafka-events'],
     ],
     // name, revenue per minute (USD), powered by
@@ -186,7 +186,7 @@ export const TENANTS = {
     ],
     deps: [
       ['player-web', 'playback-api'], ['playback-api', 'drm-service'], ['playback-api', 'cdn-edge'],
-      ['playback-api', 'accounts-api'], ['accounts-api', 'accounts-db'], ['billing-service', 'accounts-db'],
+      ['playback-api', 'accounts-api', true, 'Allow playback with a cached entitlement token'], ['accounts-api', 'accounts-db'], ['billing-service', 'accounts-db'],
     ],
     capabilities: [['Video Playback', 3000, ['playback-api']], ['Subscriptions', 800, ['billing-service']]],
     deploys: [['DEP-12', 'drm-service', 'Leo Martin', 30, 'v1.9.0', 'Upgrade DRM license server SDK', 'high']],
@@ -205,9 +205,10 @@ export const TENANTS = {
   },
 };
 
-export async function seedTenant(tenant, { reset = true } = {}) {
-  const spec = TENANTS[tenant];
-  if (!spec) throw new Error(`unknown tenant ${tenant}`);
+// `spec` lets a test graph (e.g. "ci_acme") be seeded from a named tenant spec.
+export async function seedTenant(tenant, { reset = true, spec: specName } = {}) {
+  const spec = TENANTS[specName || tenant];
+  if (!spec) throw new Error(`unknown tenant ${specName || tenant}`);
   const now = Date.now();
   if (reset) {
     try { await (await graphFor(tenant)).delete(); } catch { /* graph did not exist */ }
@@ -228,7 +229,7 @@ export async function seedTenant(tenant, { reset = true } = {}) {
   await cypher(tenant, `
     UNWIND $deps AS d
     MATCH (a:Service {name: d[0]}), (b:Service {name: d[1]})
-    CREATE (a)-[:DEPENDS_ON]->(b)`, { deps: spec.deps });
+    CREATE (a)-[:DEPENDS_ON {capacity: 1, optional: coalesce(d[2], false), fallback: d[3]}]->(b)`, { deps: spec.deps });
   await cypher(tenant, `
     UNWIND $caps AS c
     CREATE (cap:Capability {name: c[0], revenue_per_min: c[1]})
@@ -292,6 +293,12 @@ export async function seedTenant(tenant, { reset = true } = {}) {
     'CREATE INDEX FOR (s:Service) ON (s.name)',
     'CREATE INDEX FOR (p:Person) ON (p.name)',
     'CREATE INDEX FOR (i:Investigation) ON (i.id)',
+    // Full-text indexes power search_knowledge across the company brain.
+    "CALL db.idx.fulltext.createNodeIndex('Incident', 'title', 'summary')",
+    "CALL db.idx.fulltext.createNodeIndex('Runbook', 'title', 'steps')",
+    "CALL db.idx.fulltext.createNodeIndex('Decision', 'title', 'rationale')",
+    "CALL db.idx.fulltext.createNodeIndex('Document', 'title')",
+    "CALL db.idx.fulltext.createNodeIndex('Fact', 'text')",
   ]) {
     try { await cypher(tenant, idx); } catch { /* index exists */ }
   }
