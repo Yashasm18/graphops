@@ -249,6 +249,12 @@ async function runAgent(ctx, prompt, scriptedArgs) {
   if (useLlm) {
     try {
       text = await llmAgent(ctx, prompt);
+      // Shared state must never be empty: if the model answered without
+      // recording findings, the graph playbook records grounded ones.
+      if (['triage', 'historian'].includes(ctx.agent) && !ctx.findings) {
+        ctx.emit({ type: 'notice', agent: ctx.agent, text: 'The model recorded no findings, so the graph playbook is recording them in the shared state.' });
+        await SCRIPTED[ctx.agent](ctx, scriptedArgs);
+      }
     } catch (err) {
       ctx.emit({ type: 'notice', agent: ctx.agent, text: `LLM unavailable (${String(err.message).slice(0, 120)}). Switching to the scripted graph playbook.` });
       text = await SCRIPTED[ctx.agent](ctx, scriptedArgs);

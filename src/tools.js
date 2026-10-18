@@ -448,6 +448,7 @@ export const TOOLS = {
         RETURN f.id AS id, count(n) AS linked`,
       { inv: ctx.investigationId, id, agent: ctx.agent, kind, summary, confidence, evidence, at: Date.now() });
       ctx.emit?.({ type: 'finding', agent: ctx.agent, id, kind, summary, confidence, evidence });
+      ctx.findings = (ctx.findings || 0) + 1;
       return { recorded: r.id, linked_evidence_nodes: r.linked };
     },
   },
