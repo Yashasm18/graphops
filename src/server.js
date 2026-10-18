@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cypher, listTenants, graphFor, tenantGraphName, describeDbError } from './db.js';
 import { seedTenant, resetScenario, TENANTS } from './seed.js';
-import { investigate, chat, llmEnabled } from './agents.js';
+import { investigate, chat, llmEnabled, geminiKeyCount } from './agents.js';
 import { listInvestigations, getInvestigation, resolveInvestigation, decisionTrace } from './memory.js';
 import { runTool, TOOLS } from './tools.js';
 import { proposeActions, listActions, approveAction, channels } from './actions.js';
@@ -94,6 +94,7 @@ app.get('/api/status', async (req, res, next) => {
   const seeded = await listTenants();
   return {
     llm: llmEnabled(),
+    gemini_keys: geminiKeyCount(),
     public: PUBLIC,
     action_channels: channels(),
     llm_runs_left: PUBLIC ? Math.max(0, LLM_RUNS_PER_VISITOR - (llmRuns.get(visitorOf(req)) || 0)) : null,

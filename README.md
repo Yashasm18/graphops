@@ -198,7 +198,9 @@ FalkorDB options:
 Set `GRAPHOPS_SCRIPTED=true` to force this, or let it fall back by itself on rate limits. Each agent then runs a deterministic
 playbook over the *same* graph tools and writes the *same* findings and decisions, so it keeps working. With Gemini,
 the agents choose their own tools. Each Gemini model has its own free-tier quota, so on a 429 the model is put on cooldown and the
-call moves to the next one in `GEMINI_MODELS` (default `gemini-3.8-flash`, then `gemini-3.5-flash-lite`, `gemini-3.7-flash`…). If an
+call moves to the next one in `GEMINI_MODELS` (default `gemini-3.8-flash`, then `gemini-3.5-flash-lite`, `gemini-3.7-flash`…).
+Optional extra keys (`GEMINI_API_KEY_2`, `GEMINI_API_KEY_3`… or a comma-separated `GEMINI_API_KEYS`) are tried for the same model
+before stepping down, so answers stay on the best model while any key has quota; a rejected key is skipped for an hour. If an
 agent finishes without recording findings, its playbook records grounded ones, so the shared state is never empty.
 
 ### Deploy it (Render, free)

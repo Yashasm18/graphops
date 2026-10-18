@@ -9,8 +9,17 @@ import { checkCitations } from './proof.js';
 import { proposeActions } from './actions.js';
 
 const MODELS = (process.env.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3-flash-preview').split(',').map((m) => m.trim());
-const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
-export const llmEnabled = () => Boolean(ai) && process.env.GRAPHOPS_SCRIPTED !== 'true';
+// One or more API keys. Each key has its own free-tier quota, so when a key runs
+// out the call moves straight to the next key: GEMINI_API_KEY, GEMINI_API_KEY_2,
+// GEMINI_API_KEY_3… or a comma-separated GEMINI_API_KEYS.
+const KEYS = [...new Set([
+  ...(process.env.GEMINI_API_KEYS || '').split(','),
+  process.env.GEMINI_API_KEY,
+  ...Object.keys(process.env).filter((k) => /^GEMINI_API_KEY_\d+$/.test(k)).sort().map((k) => process.env[k]),
+].map((k) => (k || '').trim()).filter(Boolean))];
+const clients = KEYS.map((apiKey) => new GoogleGenAI({ apiKey }));
+export const geminiKeyCount = () => clients.length;
+export const llmEnabled = () => clients.length > 0 && process.env.GRAPHOPS_SCRIPTED !== 'true';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,31 +78,43 @@ function modelOrder(agent) {
   return order.filter(Boolean);
 }
 
+// Try the preferred model on every key before stepping down to the next model,
+// so answers keep the best available model for as long as any key has quota.
+const keyDown = new Map(); // key index -> until (invalid or revoked keys are skipped for an hour)
 async function generate(request, emit, agent) {
   let lastErr;
   for (let round = 0; round < 3; round++) {
     const now = Date.now();
-    const order = modelOrder(agent);
-    const ready = order.filter((m) => (cooldownUntil.get(m) || 0) <= now);
+    const candidates = modelOrder(agent).flatMap((model) => clients.map((_, k) => ({ model, k })));
+    const ready = candidates.filter(({ model, k }) => (cooldownUntil.get(`${k}|${model}`) || 0) <= now && (keyDown.get(k) || 0) <= now);
     if (!ready.length) {
-      const wait = Math.min(...order.map((m) => cooldownUntil.get(m))) - now;
-      if (wait > 60000) throw lastErr || new Error('all Gemini models are out of quota');
-      emit({ type: 'notice', agent, text: `all models rate-limited, waiting ${Math.ceil(wait / 1000)}s` });
+      const wait = Math.min(...candidates.map(({ model, k }) => Math.max(cooldownUntil.get(`${k}|${model}`) || 0, keyDown.get(k) || 0))) - now;
+      if (wait > 60000) throw lastErr || new Error('all Gemini keys and models are out of quota');
+      emit({ type: 'info', agent, text: `every key and model is busy, waiting ${Math.ceil(wait / 1000)}s` });
       await sleep(Math.max(500, wait));
       continue;
     }
-    for (const model of ready) {
+    for (const { model, k } of ready) {
+      if ((keyDown.get(k) || 0) > Date.now()) continue;
       try {
-        const res = await ai.models.generateContent({ ...request, model });
+        const res = await clients[k].models.generateContent({ ...request, model });
         res.modelUsed = model;
         return res;
       } catch (err) {
         lastErr = err;
         const status = err?.status || err?.code;
-        const retriable = status === 429 || status === 503 || status === 500 || /RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(String(err?.message));
+        const msg = String(err?.message || '');
+        if (status === 401 || status === 403 || /API_KEY_INVALID|API key not valid|PERMISSION_DENIED/i.test(msg)) {
+          keyDown.set(k, Date.now() + 60 * 60 * 1000);
+          emit({ type: 'info', agent, text: `API key ${k + 1} was rejected, so the next key is used` });
+          continue;
+        }
+        const retriable = status === 429 || status === 503 || status === 500 || /RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(msg);
         if (!retriable) throw err;
-        cooldownUntil.set(model, Date.now() + retryDelayMs(err));
-        emit({ type: 'info', agent, text: `${model} is at its free-tier limit, so this step uses the next model in the pool` });
+        cooldownUntil.set(`${k}|${model}`, Date.now() + retryDelayMs(err));
+        emit({ type: 'info', agent, text: clients.length > 1
+          ? `${model} on key ${k + 1} is at its free-tier limit, so this step moves to the next key or model`
+          : `${model} is at its free-tier limit, so this step uses the next model in the pool` });
       }
     }
   }

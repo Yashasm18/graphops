@@ -6,10 +6,26 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 // answer can show the exact graph operations behind it.
 export const traceStore = new AsyncLocalStorage();
 
+// The client forwards socket errors (timeouts, resets) as 'error' events on the
+// FalkorDB instance, sometimes before we hold it to add a listener. An 'error'
+// event with no listener crashes Node, so log those instead: the next query
+// reconnects (see getDb) and the API reports a clear 503 meanwhile.
+const emit = FalkorDB.prototype.emit;
+FalkorDB.prototype.emit = function guardedEmit(event, ...args) {
+  if (event === 'error' && this.listenerCount('error') === 0) {
+    console.error(`[falkordb] ${args[0]?.message || args[0]}`);
+    return false;
+  }
+  return emit.call(this, event, ...args);
+};
+
 let dbPromise;
+
+let connected = false;
 
 export function getDb() {
   if (!dbPromise) {
+    connected = false;
     const tls = process.env.FALKORDB_TLS === 'true';
     dbPromise = FalkorDB.connect({
       username: process.env.FALKORDB_USERNAME || undefined,
@@ -18,8 +34,16 @@ export function getDb() {
         host: process.env.FALKORDB_HOST || 'localhost',
         port: Number(process.env.FALKORDB_PORT || 6379),
         tls,
-        connectTimeout: 10000,
+        connectTimeout: 5000,
+        // Reconnect after drops, but give up eventually so a dead endpoint
+        // does not keep retrying in the background forever.
+        reconnectStrategy: (retries) => ((!connected && retries >= 2) || retries > 20
+          ? new Error('FalkorDB unreachable') : Math.min(200 * (retries + 1), 3000)),
       },
+    }).then((db) => {
+      connected = true;
+      db.on('error', (err) => console.error(`[falkordb] ${err?.message || err}`));
+      return db;
     }).catch((err) => {
       dbPromise = null; // retry on the next call instead of caching the failure
       throw err;

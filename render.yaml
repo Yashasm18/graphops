@@ -22,6 +22,8 @@ services:
         value: "false"
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
       - key: FALKORDB_HOST
         sync: false
       - key: FALKORDB_PORT
